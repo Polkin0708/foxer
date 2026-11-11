@@ -13,7 +13,6 @@ use std::{
     io::{BufRead, BufReader, Read},
     path::{Path, PathBuf},
 };
-pub const SOURCE: &str = "HistData Generic ASCII Tick";
 pub fn hash(path: &Path) -> Result<String, String> {
     let mut f = File::open(path).map_err(|e| format!("{}: {e}", path.display()))?;
     let mut h = Sha256::new();
@@ -40,11 +39,12 @@ pub fn json_file(path: &Path) -> Result<Value, String> {
 pub fn local_time(s: &str) -> Result<i64, String> {
     NaiveDateTime::parse_from_str(s, "%Y%m%d %H%M")
         .map(|d| (d.and_utc().timestamp() + 18000) * 1000)
-        .map_err(|_| "invalid HistData timestamp".into())
+        .map_err(|_| "invalid archive timestamp".into())
 }
 pub fn read_archive(
     path: &Path,
     symbol: &str,
+    source: &str,
     expected: &str,
     gaps: &[(i64, i64)],
     mut visit: impl FnMut(Tick) -> Result<(), String>,
@@ -96,7 +96,7 @@ pub fn read_archive(
         }
         let tick = Tick {
             symbol: symbol.into(),
-            source: SOURCE.into(),
+            source: source.into(),
             millis,
             bid: prices::price(fields[1])?,
             ask: prices::price(fields[2])?,
@@ -123,6 +123,7 @@ pub struct Archive {
     pub end: i64,
 }
 pub struct Dataset {
+    pub source: String,
     pub roots: Vec<PathBuf>,
     pub gaps: Vec<(i64, i64)>,
     pub archives: Vec<Archive>,
@@ -133,11 +134,18 @@ impl Dataset {
         let mut gaps = Vec::new();
         let mut archives = Vec::new();
         let mut provenance = Vec::new();
+        let mut source: Option<String> = None;
         for root in &roots {
             let q = json_file(&root.join("quality-report.json"))?;
-            if q["source"] != SOURCE
-                || q["timezone_conversion"] != "fixed EST UTC-05:00 to UTC; no DST"
-            {
+            let name = q["source"]
+                .as_str()
+                .filter(|s| !s.trim().is_empty())
+                .ok_or("missing data source")?;
+            if source.as_ref().is_some_and(|old| old != name) {
+                return Err("mixed history sources for instrument".into());
+            }
+            source = Some(name.to_owned());
+            if q["timezone_conversion"] != "fixed EST UTC-05:00 to UTC; no DST" {
                 return Err("unsupported data provenance".into());
             }
             if q.get("symbol").is_some_and(|s| s != symbol) {
@@ -160,7 +168,7 @@ impl Dataset {
                 gaps.push((a, b));
             }
             let m = json_file(&root.join("manifest.json"))?;
-            provenance.push(json!({"root":root,"manifest_sha256":hash(&root.join("manifest.json"))?,"quality_sha256":hash(&root.join("quality-report.json"))?}));
+            provenance.push(json!({"root":root,"source":name,"manifest_sha256":hash(&root.join("manifest.json"))?,"quality_sha256":hash(&root.join("quality-report.json"))?}));
             for f in m["files"].as_array().ok_or("missing manifest files")? {
                 let month = f["month"].as_str().ok_or("missing month")?;
                 let d = NaiveDate::parse_from_str(&format!("{month}-01"), "%Y-%m-%d")
@@ -208,6 +216,7 @@ impl Dataset {
         gaps.sort_unstable();
         gaps.dedup();
         Ok(Self {
+            source: source.ok_or("missing history source")?,
             roots,
             gaps,
             archives,
@@ -277,7 +286,7 @@ impl Dataset {
                     agg.disconnected();
                     gap_idx += 1;
                 }
-                for (tf, b) in agg.minute(symbol, SOURCE, &m)? {
+                for (tf, b) in agg.minute(symbol, &self.source, &m)? {
                     keep(tf, b);
                 }
             }

@@ -1,5 +1,5 @@
 {
-  "EURUSD": ["data/histdata-eurusd-2023", "data/histdata-eurusd-2024-2026"],
-  "GBPUSD": ["data/histdata-gbpusd-2023-2026"],
-  "USDJPY": ["data/histdata-usdjpy-2023-2026"]
+  "EURUSD": ["data/history/EURUSD"],
+  "GBPUSD": ["data/history/GBPUSD"],
+  "USDJPY": ["data/history/USDJPY"]
 }

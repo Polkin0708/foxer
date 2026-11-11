@@ -43,7 +43,7 @@ fn offline_run_is_reproducible_and_refuses_overwrite() {
             .to_string(),
     )
     .unwrap();
-    fs::write(root.join("quality-report.json"),json!({"source":"HistData Generic ASCII Tick","timezone_conversion":"fixed EST UTC-05:00 to UTC; no DST","timestamp_reversals":[],"outputs":{"EURUSD.csv":{"sha256":mhash,"bytes":csv.len()}}}).to_string()).unwrap();
+    fs::write(root.join("quality-report.json"),json!({"source":"Synthetic test feed","timezone_conversion":"fixed EST UTC-05:00 to UTC; no DST","timestamp_reversals":[],"outputs":{"EURUSD.csv":{"sha256":mhash,"bytes":csv.len()}}}).to_string()).unwrap();
     fs::write(
         root.join("sources.json"),
         json!({"EURUSD":[root.to_str().unwrap()]}).to_string(),
@@ -78,6 +78,10 @@ fn offline_run_is_reproducible_and_refuses_overwrite() {
     let result: serde_json::Value =
         serde_json::from_slice(&fs::read(root.join("a/results.json")).unwrap()).unwrap();
     assert_eq!(result["summary"]["closed"], 0);
+    assert_eq!(
+        result["sources"]["EURUSD"]["files"][0]["source"],
+        "Synthetic test feed"
+    );
     assert_eq!(result["coverage"]["EURUSD"]["ticks"], 1);
     assert!(!run("a").status.success());
     assert!(root.join("a/strategy.json").exists());

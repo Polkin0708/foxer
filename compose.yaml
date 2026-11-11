@@ -21,11 +21,8 @@ services:
       - /tmp
     volumes:
       - ./strategy:/app/strategy:ro
+      - ./data/history:/app/data/history:ro
       - ./backtest/data-sources.json:/app/backtest/data-sources.json:ro
-      - ./data/histdata-eurusd-2023:/app/data/histdata-eurusd-2023:ro
-      - ./data/histdata-eurusd-2024-2026:/app/data/histdata-eurusd-2024-2026:ro
-      - ./data/histdata-gbpusd-2023-2026:/app/data/histdata-gbpusd-2023-2026:ro
-      - ./data/histdata-usdjpy-2023-2026:/app/data/histdata-usdjpy-2023-2026:ro
       - ./reports/backtests:/app/reports/backtests
 volumes:
   cargo-registry:

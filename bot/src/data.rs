@@ -6,7 +6,6 @@ use sha2::{Digest, Sha256};
 use std::{collections::BTreeMap, fs, path::Path};
 
 const APP_ID: i64 = 0x46584731;
-pub const HISTDATA: &str = "HistData Generic ASCII Tick";
 type Result<T> = std::result::Result<T, String>;
 fn db_error(_: rusqlite::Error) -> String {
     "database operation failed".into()
@@ -114,10 +113,10 @@ fn upgrade_instruments(db: &mut Connection) -> Result<()> {
     tx.commit().map_err(db_error)
 }
 pub use forex_core::prices::{iso, parse_record, price, utc, Minute};
-pub fn import_histdata(path: &Path, root: &Path) -> Result<Value> {
-    import_histdata_symbol(path, root, "EURUSD")
+pub fn import_history(path: &Path, root: &Path) -> Result<Value> {
+    import_history_symbol(path, root, "EURUSD")
 }
-pub fn import_histdata_symbol(path: &Path, root: &Path, symbol: &str) -> Result<Value> {
+pub fn import_history_symbol(path: &Path, root: &Path, symbol: &str) -> Result<Value> {
     if !crate::valid_symbol(symbol) {
         return Err("invalid instrument".into());
     }
@@ -133,8 +132,11 @@ pub fn import_histdata_symbol(path: &Path, root: &Path, symbol: &str) -> Result<
     {
         return Err("history symbol mismatch".into());
     }
-    if report["source"] != HISTDATA
-        || report["timezone_conversion"] != "fixed EST UTC-05:00 to UTC; no DST"
+    let source = report["source"]
+        .as_str()
+        .filter(|s| !s.trim().is_empty())
+        .ok_or("missing data source")?;
+    if report["timezone_conversion"] != "fixed EST UTC-05:00 to UTC; no DST"
         || !report["timestamp_reversals"].is_array()
         || !report["missing_months"].is_array()
     {
@@ -185,7 +187,7 @@ pub fn import_histdata_symbol(path: &Path, root: &Path, symbol: &str) -> Result<
             let old: Option<String> = tx
                 .query_row(
                     "SELECT payload FROM minutes WHERE symbol=?1 AND source=?2 AND timestamp=?3",
-                    params![symbol, HISTDATA, m.timestamp],
+                    params![symbol, source, m.timestamp],
                     |r| r.get(0),
                 )
                 .optional()
@@ -197,7 +199,7 @@ pub fn import_histdata_symbol(path: &Path, root: &Path, symbol: &str) -> Result<
             } else {
                 tx.execute(
                     "INSERT INTO minutes VALUES(?1,?2,?3,?4)",
-                    params![symbol, HISTDATA, m.timestamp, payload],
+                    params![symbol, source, m.timestamp, payload],
                 )
                 .map_err(db_error)?;
                 inserted += 1;
@@ -211,7 +213,7 @@ pub fn import_histdata_symbol(path: &Path, root: &Path, symbol: &str) -> Result<
     )
     .map_err(db_error)?;
     tx.commit().map_err(db_error)?;
-    Ok(json!({"inserted_minutes":inserted,"source":HISTDATA,"quality_report_sha256":digest}))
+    Ok(json!({"inserted_minutes":inserted,"source":source,"quality_report_sha256":digest}))
 }
 #[derive(Debug, Serialize)]
 pub struct Bar {

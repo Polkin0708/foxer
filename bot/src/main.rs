@@ -53,8 +53,8 @@ fn main() -> ExitCode {
             }
         };
     }
-    if args.len() == 4 && args[0] == "import-histdata" {
-        return match forex_bot::data::import_histdata_symbol(
+    if args.len() == 4 && args[0] == "import-history" {
+        return match forex_bot::data::import_history_symbol(
             Path::new(&args[1]),
             Path::new(&args[2]),
             args[3].to_str().unwrap_or(""),
@@ -69,9 +69,9 @@ fn main() -> ExitCode {
             }
         };
     }
-    if args.len() == 3 && (args[0] == "import-histdata" || args[0] == "inspect-db") {
-        let result = if args[0] == "import-histdata" {
-            forex_bot::data::import_histdata(Path::new(&args[1]), Path::new(&args[2]))
+    if args.len() == 3 && (args[0] == "import-history" || args[0] == "inspect-db") {
+        let result = if args[0] == "import-history" {
+            forex_bot::data::import_history(Path::new(&args[1]), Path::new(&args[2]))
         } else {
             forex_bot::load(Path::new("strategy/fvg-bot-rules.json")).and_then(|strategy| {
                 let time = args[2].to_str().ok_or("invalid UTC argument")?;

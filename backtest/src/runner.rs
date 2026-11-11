@@ -118,6 +118,7 @@ pub fn run(o: Options) -> Result<(), String> {
             .filter(|(a, b)| *a < o.to && *b > floor)
             .collect();
         let worker_gaps = data.gaps.clone();
+        let worker_source = data.source.clone();
         let archives = data.archives;
         let symbol_worker = symbol.clone();
         let to = o.to;
@@ -125,8 +126,13 @@ pub fn run(o: Options) -> Result<(), String> {
         thread::spawn(move || {
             let mut last = None;
             for a in archives {
-                let result =
-                    history::read_archive(&a.path, &symbol_worker, &a.sha256, &worker_gaps, |t| {
+                let result = history::read_archive(
+                    &a.path,
+                    &symbol_worker,
+                    &worker_source,
+                    &a.sha256,
+                    &worker_gaps,
+                    |t| {
                         if last.is_some_and(|time| time > t.millis) {
                             return Err("archive boundary time reversal".into());
                         }
@@ -135,7 +141,8 @@ pub fn run(o: Options) -> Result<(), String> {
                             tx.send(Ok(t)).map_err(|_| "consumer closed")?;
                         }
                         Ok(())
-                    });
+                    },
+                );
                 if let Err(e) = result {
                     let _ = tx.send(Err(e));
                     return;

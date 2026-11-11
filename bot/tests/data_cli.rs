@@ -32,7 +32,7 @@ impl Fixture {
             csv.push_str(&format!("{time},{ms},{end},{price},{price},{price},{price},1.200000,1.200000,1.200000,1.200000,1,0\n"));
         }
         fs::write(self.root.join("prepared/EURUSD-M1-bid-ask-2026.csv"), &csv).unwrap();
-        let report = json!({"source":"HistData Generic ASCII Tick","timezone_conversion":"fixed EST UTC-05:00 to UTC; no DST","timestamp_reversals":[],"missing_months":[],"outputs":{"EURUSD-M1-bid-ask-2026.csv":{"bytes":csv.len(),"sha256":format!("{:x}",Sha256::digest(csv.as_bytes()))}}});
+        let report = json!({"source":"Synthetic test feed","timezone_conversion":"fixed EST UTC-05:00 to UTC; no DST","timestamp_reversals":[],"missing_months":[],"outputs":{"EURUSD-M1-bid-ask-2026.csv":{"bytes":csv.len(),"sha256":format!("{:x}",Sha256::digest(csv.as_bytes()))}}});
         fs::write(self.root.join("quality-report.json"), report.to_string()).unwrap();
     }
     fn run(&self, args: &[&str]) -> Output {
@@ -44,7 +44,7 @@ impl Fixture {
     }
     fn import(&self) -> Output {
         self.run(&[
-            "import-histdata",
+            "import-history",
             self.root.join("state.sqlite").to_str().unwrap(),
             self.root.to_str().unwrap(),
         ])
@@ -109,7 +109,7 @@ fn import_survives_restart_is_idempotent_and_keeps_exact_prices() {
     assert_eq!(h[1]["open"], 1110001);
     assert_eq!(h[1]["close"], 1120001);
     assert_eq!(h[1]["observed_minutes"], 2);
-    assert_eq!(h[1]["source"], "HistData Generic ASCII Tick");
+    assert_eq!(h[1]["source"], "Synthetic test feed");
 }
 #[test]
 fn midnight_weekly_and_h4_boundaries_do_not_look_ahead() {
@@ -213,15 +213,13 @@ fn imports_same_timestamp_for_different_pairs_without_mixing_history() {
     report["outputs"] = json!({"GBPUSD-M1-bid-ask-2026.csv":metadata});
     fs::write(f.root.join("quality-report.json"), report.to_string()).unwrap();
     let db = f.root.join("state.sqlite");
-    assert!(forex_bot::data::import_histdata_symbol(&db, &f.root, "USDJPY").is_err());
+    assert!(forex_bot::data::import_history_symbol(&db, &f.root, "USDJPY").is_err());
     assert_eq!(
-        forex_bot::data::import_histdata_symbol(&db, &f.root, "GBPUSD").unwrap()
-            ["inserted_minutes"],
+        forex_bot::data::import_history_symbol(&db, &f.root, "GBPUSD").unwrap()["inserted_minutes"],
         3
     );
     assert_eq!(
-        forex_bot::data::import_histdata_symbol(&db, &f.root, "GBPUSD").unwrap()
-            ["inserted_minutes"],
+        forex_bot::data::import_history_symbol(&db, &f.root, "GBPUSD").unwrap()["inserted_minutes"],
         0
     );
     let cfg = forex_bot::load(&f.root.join("strategy/fvg-bot-rules.json")).unwrap();
@@ -235,4 +233,18 @@ fn imports_same_timestamp_for_different_pairs_without_mixing_history() {
             ["m1_count"],
         0
     );
+}
+
+#[test]
+fn missing_source_is_rejected() {
+    for source in [json!(null), json!(""), json!("   ")] {
+        let f = Fixture::new();
+        f.prepare(&rows());
+        let path = f.root.join("quality-report.json");
+        let mut report: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        report["source"] = source;
+        fs::write(path, report.to_string()).unwrap();
+        assert!(!f.import().status.success());
+        assert!(!f.root.join("state.sqlite").exists());
+    }
 }
