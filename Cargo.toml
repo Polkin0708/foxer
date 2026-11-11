@@ -1,0 +1,6 @@
+[workspace]
+members = ["bot", "core", "backtest"]
+resolver = "2"
+
+[workspace.package]
+license = "GPL-3.0-only"

@@ -1,0 +1,276 @@
+{
+  "schema_version": 2,
+  "comment": "Параметры и политики определяют поведение. Поля comment — пояснения, не условия расчёта.",
+  "instrument_price_tick_scale": 1000000,
+  "instruments": [
+    {
+      "symbol": "EURUSD",
+      "price_tick": 1
+    },
+    {
+      "symbol": "GBPUSD",
+      "price_tick": 10
+    },
+    {
+      "symbol": "USDJPY",
+      "price_tick": 1000
+    }
+  ],
+  "candles": {
+    "daily_boundary": "17:00",
+    "h4_close_hours": [
+      1,
+      5,
+      9,
+      13,
+      17,
+      21
+    ],
+    "only_closed_bars": true,
+    "price_basis": "bid",
+    "timezone": "America/New_York",
+    "weekly_boundary": {
+      "time": "17:00",
+      "weekday": "Sunday"
+    }
+  },
+  "context": {
+    "bars_analyzed": {
+      "D": 400,
+      "H4": 400,
+      "W": 160
+    },
+    "minimum_bars": {
+      "D": 30,
+      "H4": 30,
+      "W": 6
+    }
+  },
+  "parameters": {
+    "atr_period": {
+      "value": 14,
+      "comment": "Количество закрытых свечей своего таймфрейма для среднего high − low."
+    },
+    "atr_reference_zone": {
+      "value": "formation_bar",
+      "comment": "свеча ATR для min_fvg_atr, trend_fvg_atr, inv_margin_atr"
+    },
+    "correction_entry_zones_from": {
+      "value": "plan_day_open",
+      "comment": "начало окна H4 FVG для D_correction_start"
+    },
+    "ifvg_entry": {
+      "value": true,
+      "comment": "вход от пробоя встречной H4 FVG"
+    },
+    "ifvg_limit_range": {
+      "value": "close_to_far_edge",
+      "comment": "допустимое положение лимитки rr_min; вне диапазона — сетап пропускается"
+    },
+    "ifvg_max_zone_age": {
+      "value": "plan_day_open",
+      "comment": "самая ранняя допустимая свеча образования пробиваемой зоны"
+    },
+    "inv_margin_atr": {
+      "value": 0.1,
+      "comment": "запас закрытия за зоной для инверсии"
+    },
+    "min_fvg_atr": {
+      "value": 0.05,
+      "comment": "минимальный размер FVG в долях ATR"
+    },
+    "plan_days": {
+      "value": 10,
+      "comment": "сколько дней от старта живёт план без входа и флаги wzone/wfrac"
+    },
+    "plan_days_statuses": {
+      "value": [
+        "wait_confirm",
+        "wait_entry",
+        "setup"
+      ],
+      "comment": "статусы, на которые действует plan_days"
+    },
+    "rr_max_correction": {
+      "value": 10.0,
+      "comment": "потолок тейка в коррекции в R"
+    },
+    "rr_max_trend": {
+      "value": 10.0,
+      "comment": "потолок тейка по тренду в R"
+    },
+    "rr_min": {
+      "value": 2.0,
+      "comment": "минимальный RR для тренда и коррекции; ниже — лимитка на точку RR = rr_min"
+    },
+    "stop_buffer_atr": {
+      "value": 0.05,
+      "comment": "запас за фракталом/девиацией для стопа"
+    },
+    "trend_fvg_atr": {
+      "value": 0.25,
+      "comment": "минимальный размер FVG, которая влияет на тренд"
+    },
+    "stop_fallback_h4_bars": {
+      "value": 10,
+      "comment": "Количество H4-свечей для запасного стопа при отсутствии защитного фрактала."
+    },
+    "confirmation_inversion_h4_bars": {
+      "value": 30,
+      "comment": "Окно H4 для встречной зоны, инверсия которой подтверждает план."
+    },
+    "weekly_fractal_sweep_lookback_bars": {
+      "value": 60,
+      "comment": "Окно недельных свечей для снятого фрактала по недельному тренду."
+    },
+    "target_fractal_lookback_d_bars": {
+      "value": 80,
+      "comment": "Окно дневных свечей для фрактальной цели."
+    },
+    "target_fractal_lookback_w_bars": {
+      "value": 60,
+      "comment": "Окно недельных свечей для фрактальной цели."
+    }
+  },
+  "policies": {
+    "atr": {
+      "method": "mean_high_low",
+      "stop_reference": "last_closed_h4"
+    },
+    "zones": {
+      "fvg": "three_candle_gap",
+      "gap": "previous_close_to_next_open",
+      "lifecycle": "reaction_before_inversion",
+      "trend": "weighted_live_zones",
+      "selection": "latest_formation_bar",
+      "tiebreak": "nearest_to_price",
+      "comment": "Гэп и FVG имеют одинаковый жизненный цикл. Неполные данные не восстанавливаются."
+    },
+    "fractals": {
+      "formation": "strict_three_bar_extremum",
+      "sweep": "strict_extremum_break"
+    },
+    "plans": {
+      "weekly_rules": [
+        "W_trend_new",
+        "W_trend_end",
+        "W_trend_flip"
+      ],
+      "daily_rules": [
+        "D_first_zone_ignored",
+        "D_correction_start",
+        "D_correction_end",
+        "D_continuation_from_weekly_zone",
+        "D_correction_after_weekly_fractal",
+        "D_point_A",
+        "D_trend_weakness",
+        "W_point_A",
+        "W_fractal_swept"
+      ],
+      "daily_requires_weekly_trend": true,
+      "roles": {
+        "W": "direction",
+        "D": "plans",
+        "H4": "confirmation_entry_tracking"
+      },
+      "daily_poi": "triggering_daily_zone",
+      "weekly_poi": "latest_live_weekly_zone",
+      "confirmation": [
+        "new_fvg_in_plan_direction",
+        "opposite_fvg_inversion"
+      ],
+      "entry": [
+        "new_fvg_after_plan_start",
+        "opposite_fvg_inversion"
+      ],
+      "entry_priority": "latest_new_fvg",
+      "stop": "latest_protective_fractal_or_window_extreme",
+      "comment": "ID правил обозначают фиксированные алгоритмы. D_point_A и D_trend_weakness отключены в modules."
+    },
+    "execution": {
+      "above_maximum": "cap_take_profit_at_rr_max",
+      "below_minimum": "limit_entry_at_rr_min_keep_stop_and_target",
+      "event_order": "observed_quotes_not_assumed_candle_path",
+      "market_quote": "first_available_after_confirmation",
+      "market_timing": "immediately_after_confirming_h4_close",
+      "pending_cancel_on": [
+        "target_reached_before_entry",
+        "stop_reached_before_entry",
+        "inverted_zone_broken_before_entry"
+      ],
+      "pending_cancel_quote_sides": {
+        "long": "bid",
+        "short": "ask"
+      },
+      "quote_sides": {
+        "long": {
+          "entry": "ask",
+          "exit": "bid"
+        },
+        "short": {
+          "entry": "bid",
+          "exit": "ask"
+        }
+      },
+      "limit_entry": "solve_rr_min_keep_stop_target",
+      "pending_zone_break": "h4_close_beyond_inverted_zone_with_atr_margin",
+      "comment": "Порядок исполнения — по наблюдаемым котировкам. Формула лимита реализована в коде; RR берётся из parameters.",
+      "entry_mode": "auto"
+    },
+    "targets": {
+      "fvg_boundary": "near",
+      "selection": "nearest_eligible_in_trade_direction",
+      "timeframe_by_poi": {
+        "D": "D",
+        "W": "W"
+      },
+      "types": [
+        "unswept_fractal",
+        "fvg"
+      ],
+      "weekly_poi_daily_alternative": {
+        "enabled": true,
+        "must_be_closer": true,
+        "minimum_rr": "rr_min"
+      },
+      "mode": "structural_only"
+    },
+    "trade_window": {
+      "mode": "all_available_market_hours",
+      "session_filter": false
+    },
+    "positions": {
+      "parallel_trades": "independent_plans",
+      "one_entry_per_plan": "until_signal_closed",
+      "simultaneous_setups": "independent_plans",
+      "signal_identity": "idempotent_setup",
+      "rule_update": "recalculate_waiting_preserve_published_levels",
+      "comment": "Смена плана не отменяет сопровождение его опубликованного сигнала."
+    },
+    "modules": {
+      "range_trading": false,
+      "daily_point_a": false,
+      "weak_correction": false,
+      "comment": "Включение этих модулей пока не реализовано и отклоняется."
+    },
+    "risk": {
+      "max_open_risk_r": null,
+      "per_trade_r": 1.0,
+      "counted_statuses": [
+        "active",
+        "setup"
+      ],
+      "queue_order": [
+        "signal_time",
+        "rr_desc",
+        "instrument_order"
+      ],
+      "comment": "Лимит риска не реализован: max_open_risk_r допускает только null; остальные поля описывают фиксированную политику."
+    }
+  },
+  "messages": {
+    "W_trend_new": "На неделе сложилось направление ↑/↓",
+    "W_trend_end": "конец тренда; относящиеся к завершившемуся тренду ожидающие планы снимаются; активные сигналы продолжают отслеживаться до стопа/тейка",
+    "W_trend_flip": "смена тренда обрабатывается отдельно для каждого плана: старое направление снимается; план по новому направлению сохраняется, correction переименовывается в trend; активные сигналы продолжают отслеживаться"
+  }
+}

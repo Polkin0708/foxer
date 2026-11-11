@@ -1,0 +1,25 @@
+.DS_Store
+__pycache__/
+*.py[cod]
+.venv/
+
+
+/dist/
+/deploy/
+/reports/backtests/
+/target/
+
+.env
+.env.*
+!.env.example
+
+/strategy/fvg-bot-rules.json
+logogroup.png
+
+# Publish the schema example, not local databases or datasets.
+/data/*
+!/data/example.sql
+*.sqlite
+*.sqlite-*
+*.sqlite3
+*.db
