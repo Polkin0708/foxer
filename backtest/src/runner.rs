@@ -7,11 +7,12 @@ use forex_core::{
     engine::Engine,
     feed::{Aggregator, Tick},
     model::Strategy,
+    prices::Minute,
 };
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, VecDeque},
     fs::{self, File},
     io::{BufWriter, Write},
     path::{Path, PathBuf},
@@ -44,20 +45,47 @@ fn write_json(path: &Path, v: &Value) -> Result<(), String> {
     )
     .map_err(|e| e.to_string())
 }
+enum Feed {
+    Tick(Tick),
+    Minute(Minute),
+}
 struct Market {
     engine: Engine,
     agg: Aggregator,
-    rx: Receiver<Result<Tick, String>>,
+    rx: Receiver<Result<Feed, String>>,
+    buffer: VecDeque<Tick>,
+    source: String,
     head: Option<Tick>,
     gaps: Vec<(i64, i64)>,
     gap_index: usize,
     coverage: Value,
     bars: BTreeMap<String, Vec<Value>>,
 }
-fn next(rx: &Receiver<Result<Tick, String>>) -> Result<Option<Tick>, String> {
+fn next(rx: &Receiver<Result<Feed, String>>) -> Result<Option<Feed>, String> {
     match rx.recv() {
         Ok(t) => t.map(Some),
         Err(_) => Ok(None),
+    }
+}
+/// Next quote; a minute is expanded only when needed, using the current ledger.
+fn pull(m: &mut Market, ledger: &Ledger, symbol: &str) -> Result<Option<Tick>, String> {
+    loop {
+        if let Some(t) = m.buffer.pop_front() {
+            return Ok(Some(t));
+        }
+        match next(&m.rx)? {
+            None => return Ok(None),
+            Some(Feed::Tick(t)) => return Ok(Some(t)),
+            Some(Feed::Minute(minute)) => {
+                let (order, conflict) = history::intrabar_order(&minute, &ledger.trades, symbol);
+                if conflict {
+                    let n = m.coverage["order_conflicts"].as_u64().unwrap_or(0);
+                    m.coverage["order_conflicts"] = json!(n + 1);
+                }
+                m.buffer
+                    .extend(history::synthetic_ticks(&minute, symbol, &m.source, order));
+            }
+        }
     }
 }
 pub fn run(o: Options) -> Result<(), String> {
@@ -87,6 +115,8 @@ pub fn run(o: Options) -> Result<(), String> {
     }
     let source_cfg = history::json_file(&o.data_config)?;
     let mut markets = Vec::new();
+    let mut ledger = Ledger::default();
+    let mut minute_mode = false;
     let mut sources = BTreeMap::new();
     let mut initial = BTreeMap::new();
     let floor = o.from.div_euclid(60000) * 60000;
@@ -119,11 +149,28 @@ pub fn run(o: Options) -> Result<(), String> {
             .collect();
         let worker_gaps = data.gaps.clone();
         let worker_source = data.source.clone();
+        let minutes = data.minute_mode;
+        minute_mode |= minutes;
+        let minute_files = if minutes {
+            data.prepared_files(symbol)?
+        } else {
+            Vec::new()
+        };
         let archives = data.archives;
         let symbol_worker = symbol.clone();
         let to = o.to;
         let (tx, rx) = sync_channel(1024);
         thread::spawn(move || {
+            if minutes {
+                let result = history::read_minutes(&minute_files, floor, to, |m| {
+                    tx.send(Ok(Feed::Minute(m)))
+                        .map_err(|_| "consumer closed".to_owned())
+                });
+                if let Err(e) = result {
+                    let _ = tx.send(Err(e));
+                }
+                return;
+            }
             let mut last = None;
             for a in archives {
                 let result = history::read_archive(
@@ -138,7 +185,7 @@ pub fn run(o: Options) -> Result<(), String> {
                         }
                         last = Some(t.millis);
                         if t.millis >= floor && t.millis < to {
-                            tx.send(Ok(t)).map_err(|_| "consumer closed")?;
+                            tx.send(Ok(Feed::Tick(t))).map_err(|_| "consumer closed")?;
                         }
                         Ok(())
                     },
@@ -149,24 +196,30 @@ pub fn run(o: Options) -> Result<(), String> {
                 }
             }
         });
-        let head = next(&rx)?;
-        markets.push(Market {
+        let mut market = Market {
             engine,
             agg,
             rx,
-            head,
+            buffer: VecDeque::new(),
+            source: data.source.clone(),
+            head: None,
             gaps,
             gap_index: 0,
-            coverage: json!({"ticks":0,"first":null,"last":null}),
+            coverage: if minutes {
+                json!({"ticks":0,"first":null,"last":null,"order_conflicts":0})
+            } else {
+                json!({"ticks":0,"first":null,"last":null})
+            },
             bars: BTreeMap::new(),
-        });
+        };
+        market.head = pull(&mut market, &ledger, symbol)?;
+        markets.push(market);
     }
     fs::create_dir_all(o.output.parent().unwrap_or(Path::new("."))).map_err(|e| e.to_string())?;
     fs::create_dir(&o.output).map_err(|e| e.to_string())?;
     fs::write(o.output.join("strategy.json"), &bytes).map_err(|e| e.to_string())?;
     let mut journal =
         BufWriter::new(File::create(o.output.join("events.jsonl")).map_err(|e| e.to_string())?);
-    let mut ledger = Ledger::default();
     let mut sequence = 0u64;
     loop {
         let chosen = markets
@@ -212,7 +265,7 @@ pub fn run(o: Options) -> Result<(), String> {
                 writeln!(journal,"{}",json!({"sequence":sequence,"millis":t.millis,"symbol":symbol,"bid":t.bid,"ask":t.ask,"change":event})).map_err(|e|e.to_string())?;
             }
         }
-        m.head = next(&m.rx)?;
+        m.head = pull(m, &ledger, symbol)?;
     }
     for (i, m) in markets.iter_mut().enumerate() {
         while m.gap_index < m.gaps.len() {
@@ -293,7 +346,7 @@ pub fn run(o: Options) -> Result<(), String> {
         .enumerate()
         .map(|(i, s)| (s.clone(), markets[i].coverage.clone()))
         .collect();
-    let result = json!({"schema_version":1,"engine_version":env!("CARGO_PKG_VERSION"),"program_sha256":history::hash(&std::env::current_exe().map_err(|e|e.to_string())?)?,"strategy_sha256":format!("{:x}",Sha256::digest(&bytes)),"from":o.from,"to":o.to,"symbols":selected,"sample_seed":20261110,"initial_context":initial,"sources":sources,"coverage":coverage,"summary":ledger.summary(),"by_symbol":by_symbol,"monthly":monthly,"gap_affected_summary":stats(&affected),"trades":ledger.trades,"examples":chosen_examples,"execution":{"market":"first observed bid/ask","limit":"level without improvement","stop":"observed exit-side quote","target":"level without improvement","costs":"spread only","gaps":"observed ticks only; affected trades flagged","drawdown":"closed trades only"}});
+    let result = json!({"schema_version":1,"engine_version":env!("CARGO_PKG_VERSION"),"program_sha256":history::hash(&std::env::current_exe().map_err(|e|e.to_string())?)?,"strategy_sha256":format!("{:x}",Sha256::digest(&bytes)),"from":o.from,"to":o.to,"symbols":selected,"sample_seed":20261110,"initial_context":initial,"sources":sources,"coverage":coverage,"summary":ledger.summary(),"by_symbol":by_symbol,"monthly":monthly,"gap_affected_summary":stats(&affected),"trades":ledger.trades,"examples":chosen_examples,"execution":{"market":"first observed bid/ask","limit":"level without improvement","stop":"observed exit-side quote","target":"level without improvement","costs":"spread only","gaps":"observed ticks only; affected trades flagged","drawdown":"closed trades only","intrabar":if minute_mode {"synthetic: 4 quotes per M1, worst-case extreme order for open signals"} else {"observed ticks"}}});
     write_json(&o.output.join("results.json"), &result)?;
     let mut csv = csv::Writer::from_path(o.output.join("trades.csv")).map_err(|e| e.to_string())?;
     let fields = [
