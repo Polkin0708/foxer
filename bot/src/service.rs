@@ -136,25 +136,6 @@ pub(crate) fn history_engine(
     }
     Ok(engine)
 }
-pub fn prepare_state(database: &Path, strategy: &Path) -> Result<String, String> {
-    if !database.is_file() {
-        return Err("existing database required".into());
-    }
-    let cfg = crate::load(strategy)?;
-    if cfg.candles.price_basis == "index" {
-        return Err(
-            "index source starts with a new database; Bid history cannot seed index candles".into(),
-        );
-    }
-    let mut runtime = Runtime::open_file(database, strategy, Engine::default())?;
-    for item in &cfg.instruments {
-        runtime.seed_instrument(&item.symbol, history_engine(database, &cfg, &item.symbol)?)?;
-    }
-    Ok(format!(
-        "Existing SQLite updated in place; rules loaded from JSON; {} instruments.",
-        cfg.instruments.len()
-    ))
-}
 fn image_mime(bytes: &[u8]) -> Result<String, Failure> {
     if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
         Ok("image/png".into())

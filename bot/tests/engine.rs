@@ -91,8 +91,7 @@ fn expired_plans_do_not_enter_later() {
     e.quote(
         Quote {
             time: 10 + 11 * 86400,
-            bid: 100,
-            ask: 101,
+            price: 100,
         },
         1,
         &c,
@@ -214,8 +213,7 @@ fn stale_revision_preserves_levels_and_cannot_resurrect_result() {
         Side::Long,
         Quote {
             time: 1,
-            bid: 100,
-            ask: 101,
+            price: 100,
         },
         90,
         150,
@@ -233,16 +231,7 @@ fn stale_revision_preserves_levels_and_cannot_resurrect_result() {
     assert_eq!(e.signals()[0].stop, 90);
     assert!(!e.activate_revision(&revised).unwrap());
     assert_eq!(e.signals()[0].stop, 90);
-    e.quote(
-        Quote {
-            time: 2,
-            bid: 89,
-            ask: 90,
-        },
-        1,
-        &c,
-    )
-    .unwrap();
+    e.quote(Quote { time: 2, price: 89 }, 1, &c).unwrap();
     assert_eq!(e.signals()[0].state, SignalState::Stop);
     assert!(!e.activate_revision(&revised).unwrap());
     assert_eq!(e.signals()[0].state, SignalState::Stop);
@@ -269,8 +258,7 @@ fn rule_change_preserves_published_levels() {
     e.quote(
         Quote {
             time: 12,
-            bid: 130,
-            ask: 131,
+            price: 130,
         },
         1,
         &c,
@@ -326,7 +314,7 @@ fn weekly_sweep_ignores_fractals_older_than_sixty_bars() {
 }
 
 #[test]
-fn strategy_format_change_preserves_synthetic_signal_sequence() {
+fn index_price_preserves_synthetic_signal_sequence() {
     use sha2::{Digest, Sha256};
     let c = cfg();
     let mut e = Engine::default();
@@ -345,20 +333,16 @@ fn strategy_format_change_preserves_synthetic_signal_sequence() {
     e.add_plan("D_correction_end", Side::Long, Timeframe::D, poi(1), 10);
     e.closed(Timeframe::H4, bar(11, 125, 140, 120, 130), &c)
         .unwrap();
-    for (time, bid, ask) in [
-        (12, 130, 131),
-        (13, 150, 151),
-        (14, 311, 312),
-        (14, 311, 312),
-    ] {
-        e.quote(Quote { time, bid, ask }, 1, &c).unwrap();
+    for (time, price) in [(12, 130), (13, 150), (14, 311), (14, 311)] {
+        e.quote(Quote { time, price }, 1, &c).unwrap();
         states.push(serde_json::to_value(&e).unwrap());
     }
     assert_eq!(e.signals()[0].state, SignalState::TakeProfit);
+    assert_eq!(e.signals()[0].entry, 130);
     let digest = format!("{:x}", Sha256::digest(serde_json::to_vec(&states).unwrap()));
     assert_eq!(
         digest,
-        "01e8661638d7539c136fe03d226a7e3c8418f8bfa06d4356b4147785c5db0e72"
+        "a45a2208ae8a577092524b16387a55326822e00f120d86a5d25c33ab7c381a14"
     );
 }
 

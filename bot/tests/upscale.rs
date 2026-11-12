@@ -186,20 +186,20 @@ fn index_strategy_and_integer_rounding_are_explicit() {
             .unwrap()
             .remove(0);
         let t = q.to_tick().unwrap();
-        assert_eq!((t.bid, t.ask), (expected, expected));
+        assert_eq!(t.price, expected);
         assert_eq!(t.source, "upscale:index");
     }
 }
 #[test]
-fn index_runtime_restores_snapshot_and_rejects_spread_ticks() {
+fn index_runtime_restores_snapshot_and_rejects_other_sources() {
     use forex_bot::{engine::Engine, feed::Tick, runtime::Runtime};
     let p = std::env::temp_dir().join(format!("upscale-index-{}.sqlite", std::process::id()));
     let mut r = Runtime::open(&p, index_rules(), Engine::default()).unwrap();
     let t = Tick {
         symbol: "EURUSD".into(),
         millis: 2000,
-        bid: 100,
-        ask: 100,
+        price: 100,
+
         source: "upscale:index".into(),
     };
     r.tick(t.clone(), false).unwrap();
@@ -211,9 +211,9 @@ fn index_runtime_restores_snapshot_and_rejects_spread_ticks() {
     let wrong = Tick {
         symbol: "EURUSD".into(),
         millis: 3000,
-        bid: 100,
-        ask: 101,
-        source: "biquote".into(),
+        price: 100,
+
+        source: "other-source".into(),
     };
     assert!(r.tick(wrong, false).is_err());
 }

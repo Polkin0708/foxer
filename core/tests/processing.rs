@@ -5,8 +5,7 @@ use forex_core::{
 };
 #[test]
 fn shared_processing_matches_existing_sequence_and_snapshot() {
-    let mut cfg = forex_core::load(std::path::Path::new("../strategy/fvg-bot-rules.json")).unwrap();
-    cfg.candles.price_basis = "bid".into(); // Existing Bid/Ask sequence.
+    let cfg = forex_core::load(std::path::Path::new("../strategy/fvg-bot-rules.json")).unwrap();
     let mut old = Engine::default();
     let mut new = Engine::default();
     let mut a = Aggregator::default();
@@ -15,10 +14,9 @@ fn shared_processing_matches_existing_sequence_and_snapshot() {
     for i in 0..200 {
         let t = Tick {
             symbol: "EURUSD".into(),
-            source: "fixture".into(),
+            source: "upscale:index".into(),
             millis: (start + i * 3600) * 1000 + 123,
-            bid: 1_100_000 + i % 7 * 100,
-            ask: 1_100_010 + i % 7 * 100,
+            price: 1_100_000 + i % 7 * 100,
         };
         for (tf, bar) in a.push(t.clone()).unwrap() {
             old.closed(tf, bar, &cfg).unwrap();
@@ -26,8 +24,7 @@ fn shared_processing_matches_existing_sequence_and_snapshot() {
         old.quote(
             Quote {
                 time: t.millis / 1000,
-                bid: t.bid,
-                ask: t.ask,
+                price: t.price,
             },
             1,
             &cfg,

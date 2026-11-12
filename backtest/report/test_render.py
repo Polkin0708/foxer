@@ -28,7 +28,7 @@ class ReportTests(unittest.TestCase):
             pdf = PdfReader(p/'report.pdf')
             text = '\n'.join(page.extract_text() for page in pdf.pages)
             self.assertIn('Сделки не закрывались', text)
-            self.assertIn('Спред', text)
+            self.assertIn('Издержки не моделируются', text)
             self.assertIn('EURUSD', text)
             self.assertGreaterEqual(len(pdf.pages), 2)
 

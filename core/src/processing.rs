@@ -23,9 +23,6 @@ pub fn process(
     c: &Strategy,
     allow: bool,
 ) -> Result<Batch, String> {
-    if c.candles.price_basis == "index" && (t.source != "upscale:index" || t.bid != t.ask) {
-        return Err("index strategy requires Upscale index ticks".into());
-    }
     let step = c
         .instruments
         .iter()
@@ -49,8 +46,7 @@ pub fn process(
     }
     let q = crate::trading::Quote {
         time: t.millis / 1000,
-        bid: t.bid,
-        ask: t.ask,
+        price: t.price,
     };
     if allow {
         e.quote(q, step, c)?;

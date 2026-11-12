@@ -117,7 +117,7 @@ def candles_chart(candles, trade, frame, zone=None):
                 continue
             ax.axvline(x, color=GREY, lw=.6, alpha=.6)
             ax.text(x, .98 if key == 'entry_at' else .04, label, transform=ax.get_xaxis_transform(), fontsize=8, va='top' if key == 'entry_at' else 'bottom', rotation=90)
-    ax.set_title(f'{frame} / Bid / время UTC', loc='left', fontsize=10, color=NAVY)
+    ax.set_title(f'{frame} / индекс / время UTC', loc='left', fontsize=10, color=NAVY)
     ax.legend(fontsize=8, loc='best', framealpha=.9)
     ax.ticklabel_format(axis='y', style='plain', useOffset=False)
     ax.tick_params(labelsize=8)
@@ -170,7 +170,7 @@ def render(directory):
     story.append(equity_chart(s, data['from'], data['to']))
     if not s['closed']:
         story.append(paragraph('Сделки не закрывались. Нулевая выборка не характеризует качество стратегии.'))
-    story.append(paragraph('Результат по наблюдаемым котировкам. Спред включён через Bid/Ask; комиссии и своп исключены. Просадка рассчитана по закрытым сделкам, не по стоимости открытых позиций.', 'SmallRu'))
+    story.append(paragraph('Результат по наблюдаемым котировкам. Издержки не моделируются. Просадка рассчитана по закрытым сделкам, не по стоимости открытых позиций.', 'SmallRu'))
     heading('Результаты по парам')
     rows = [['Пара','Закрыто','Итог, R','Просадка, R','Среднее, R']]
     for symbol, row in data['by_symbol'].items():
@@ -207,7 +207,7 @@ def render(directory):
     story.append(paragraph('Версия: '+data['engine_version']+'. Полные хеши архивов, manifests и подготовленных файлов сохранены в results.json; применённые правила - в strategy.json.', 'SmallRu'))
     heading('Методика исполнения')
     for text in [
-        'Рыночный вход - первая допустимая котировка. Покупка входит по Ask, выходит по Bid; продажа - наоборот.',
+        'Рыночный вход - первая допустимая котировка. Вход и выход используют одну индексную цену.',
         'Лимитный вход и тейк исполняются по уровню, без улучшения цены. Стоп - по первой наблюдаемой цене стороны выхода; перескок может дать убыток больше 1R.',
         'R фиксируется расстоянием от цены входа до исходного стопа. Дополнительные задержки и проскальзывание не моделируются.',
         'В начале периода нет позиций и ожидающих планов. Предыдущие свечи используются только для текущих зон, фракталов и направления.',

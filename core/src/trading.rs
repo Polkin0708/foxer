@@ -260,8 +260,7 @@ fn round_tick(value: i128, tick: i64, up: bool) -> Result<i64, String> {
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]
 pub struct Quote {
     pub time: i64,
-    pub bid: i64,
-    pub ask: i64,
+    pub price: i64,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SignalState {
@@ -319,7 +318,7 @@ impl Signal {
             return Err("invalid execution inputs".into());
         }
         let sign = if side == Side::Long { 1i128 } else { -1i128 };
-        let market = if side == Side::Long { q.ask } else { q.bid };
+        let market = q.price;
         let risk = sign * (i128::from(market) - i128::from(stop));
         let reward = sign * (i128::from(target) - i128::from(market));
         if risk <= 0 || reward <= 0 {
@@ -373,16 +372,8 @@ impl Signal {
             return;
         }
         self.last_quote_time = q.time;
-        let exit = if self.side == Side::Long {
-            q.bid
-        } else {
-            q.ask
-        };
-        let entry = if self.side == Side::Long {
-            q.ask
-        } else {
-            q.bid
-        };
+        let exit = q.price;
+        let entry = q.price;
         let stopped = if self.side == Side::Long {
             exit <= self.stop
         } else {
@@ -413,7 +404,7 @@ impl Signal {
 
 impl Quote {
     pub fn valid(self) -> bool {
-        self.bid > 0 && self.ask >= self.bid
+        self.price > 0
     }
 }
 

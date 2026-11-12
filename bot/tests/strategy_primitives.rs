@@ -82,15 +82,14 @@ fn short_stop_uses_latest_fractal_not_nearest_price() {
     assert_eq!(stop, 1_105_050);
 }
 #[test]
-fn entries_use_quote_sides_limit_rounding_and_structural_target_cap() {
+fn entries_use_index_price_limit_rounding_and_structural_target_cap() {
     let cfg = config();
     let market = Signal::new(
         "a",
         Side::Long,
         Quote {
             time: 1,
-            bid: 100,
-            ask: 101,
+            price: 101,
         },
         90,
         150,
@@ -105,8 +104,7 @@ fn entries_use_quote_sides_limit_rounding_and_structural_target_cap() {
         Side::Short,
         Quote {
             time: 1,
-            bid: 100,
-            ask: 101,
+            price: 101,
         },
         110,
         -100,
@@ -119,8 +117,7 @@ fn entries_use_quote_sides_limit_rounding_and_structural_target_cap() {
         Side::Long,
         Quote {
             time: 1,
-            bid: 100,
-            ask: 101,
+            price: 101,
         },
         100,
         200,
@@ -134,8 +131,7 @@ fn entries_use_quote_sides_limit_rounding_and_structural_target_cap() {
         Side::Long,
         Quote {
             time: 1,
-            bid: 110,
-            ask: 111,
+            price: 110,
         },
         100,
         120,
@@ -147,15 +143,14 @@ fn entries_use_quote_sides_limit_rounding_and_structural_target_cap() {
     assert_eq!(limit.state, SignalState::Pending);
 }
 #[test]
-fn pending_cancel_is_terminal_and_uses_exit_side() {
+fn pending_cancel_is_terminal_and_uses_index_price() {
     let cfg = config();
     let mut s = Signal::new(
         "a",
         Side::Long,
         Quote {
             time: 1,
-            bid: 110,
-            ask: 111,
+            price: 110,
         },
         100,
         120,
@@ -165,14 +160,12 @@ fn pending_cancel_is_terminal_and_uses_exit_side() {
     .unwrap();
     s.observe(Quote {
         time: 2,
-        bid: 120,
-        ask: 121,
+        price: 120,
     });
     assert_eq!(s.state, SignalState::Cancelled);
     s.observe(Quote {
         time: 3,
-        bid: 105,
-        ask: 106,
+        price: 105,
     });
     assert_eq!(s.state, SignalState::Cancelled);
     let mut short = Signal::new(
@@ -180,8 +173,7 @@ fn pending_cancel_is_terminal_and_uses_exit_side() {
         Side::Short,
         Quote {
             time: 1,
-            bid: 109,
-            ask: 110,
+            price: 109,
         },
         120,
         100,
@@ -191,8 +183,7 @@ fn pending_cancel_is_terminal_and_uses_exit_side() {
     .unwrap();
     short.observe(Quote {
         time: 2,
-        bid: 119,
-        ask: 120,
+        price: 120,
     });
     assert_eq!(short.state, SignalState::Cancelled);
 }
@@ -204,8 +195,7 @@ fn signals_restore_and_repeat_quotes_without_duplicate_results() {
         Side::Short,
         Quote {
             time: 1,
-            bid: 110,
-            ask: 111,
+            price: 110,
         },
         120,
         80,
@@ -213,23 +203,14 @@ fn signals_restore_and_repeat_quotes_without_duplicate_results() {
         &cfg,
     )
     .unwrap();
-    s.observe(Quote {
-        time: 2,
-        bid: 79,
-        ask: 81,
-    });
+    s.observe(Quote { time: 2, price: 81 });
     assert_eq!(s.state, SignalState::Active);
     let mut restored: Signal = serde_json::from_str(&serde_json::to_string(&s).unwrap()).unwrap();
-    restored.observe(Quote {
-        time: 3,
-        bid: 79,
-        ask: 80,
-    });
+    restored.observe(Quote { time: 3, price: 79 });
     assert_eq!(restored.state, SignalState::TakeProfit);
     restored.observe(Quote {
         time: 4,
-        bid: 121,
-        ask: 122,
+        price: 121,
     });
     assert_eq!(restored.state, SignalState::TakeProfit);
 }

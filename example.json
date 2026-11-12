@@ -198,23 +198,9 @@
         "stop_reached_before_entry",
         "inverted_zone_broken_before_entry"
       ],
-      "pending_cancel_quote_sides": {
-        "long": "bid",
-        "short": "ask"
-      },
-      "quote_sides": {
-        "long": {
-          "entry": "ask",
-          "exit": "bid"
-        },
-        "short": {
-          "entry": "bid",
-          "exit": "ask"
-        }
-      },
       "limit_entry": "solve_rr_min_keep_stop_target",
       "pending_zone_break": "h4_close_beyond_inverted_zone_with_atr_margin",
-      "comment": "В режиме index оба технических слота Bid/Ask равны индексной цене Upscale; спред не моделируется. Сигналы не подтверждают исполнение ордеров.",
+      "comment": "Свечи и события сигналов используют единую индексную цену Upscale. Сигналы не подтверждают исполнение ордеров.",
       "entry_mode": "auto"
     },
     "targets": {

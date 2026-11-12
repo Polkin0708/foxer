@@ -37,34 +37,6 @@ fn main() -> ExitCode {
             }
         };
     }
-    if args.len() == 3 && args[0] == "prepare-state" {
-        return match forex_bot::service::prepare_state(Path::new(&args[1]), Path::new(&args[2])) {
-            Ok(v) => {
-                println!("{v}");
-                ExitCode::SUCCESS
-            }
-            Err(e) => {
-                eprintln!("{e}");
-                ExitCode::from(1)
-            }
-        };
-    }
-    if args.len() == 2 && args[0] == "upgrade-db" {
-        if !Path::new(&args[1]).is_file() {
-            eprintln!("existing database required");
-            return ExitCode::from(1);
-        }
-        return match forex_bot::data::open(Path::new(&args[1])) {
-            Ok(_) => {
-                println!("Existing database schema updated.");
-                ExitCode::SUCCESS
-            }
-            Err(e) => {
-                eprintln!("{e}");
-                ExitCode::from(1)
-            }
-        };
-    }
     if args.len() == 4 && args[0] == "import-history" {
         return match forex_bot::data::import_history_symbol(
             Path::new(&args[1]),

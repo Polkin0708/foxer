@@ -1,6 +1,6 @@
 use forex_bot::settings::Settings;
 fn valid() -> String {
-    "TELEGRAM_BOT_TOKEN=fake-token\nTELEGRAM_CHAT_ID=-100123\nOPENAI_API_KEY=fake-key\nOPENAI_MODEL=test-model\nOPENAI_MAX_TOKENS=1500\nDATABASE_PATH=data/bot.sqlite\nSTRATEGY_PATH=strategy/fvg-bot-rules.json\nQUOTE_STALE_SECONDS=120\nPRICE_TICK=1\n".into()
+    "TELEGRAM_BOT_TOKEN=fake-token\nTELEGRAM_CHAT_ID=-100123\nOPENAI_API_KEY=fake-key\nOPENAI_MODEL=test-model\nOPENAI_MAX_TOKENS=1500\nDATABASE_PATH=data/signals.sqlite\nSTRATEGY_PATH=strategy/fvg-bot-rules.json\nQUOTE_STALE_SECONDS=120\nPRICE_TICK=1\n".into()
 }
 #[test]
 fn parses_settings_without_author_allowlist_or_manual_data_gate() {

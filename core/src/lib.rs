@@ -94,7 +94,7 @@ pub fn validate(c: &Strategy) -> Result<(), String> {
     {
         return Err("unsupported: plan_days_statuses".into());
     }
-    if !matches!(c.candles.price_basis.as_str(), "bid" | "index") {
+    if c.candles.price_basis != "index" {
         return Err("unsupported: /candles/price_basis".into());
     }
     for (path, expected) in [

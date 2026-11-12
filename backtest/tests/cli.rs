@@ -8,7 +8,6 @@ fn offline_run_is_reproducible_and_refuses_overwrite() {
     fs::create_dir_all(root.join("prepared")).unwrap();
     let mut cfg: serde_json::Value =
         serde_json::from_slice(&fs::read("../strategy/fvg-bot-rules.json").unwrap()).unwrap();
-    cfg["candles"]["price_basis"] = json!("bid"); // The synthetic archive contains Bid/Ask.
     for tf in ["W", "D", "H4"] {
         cfg["context"]["minimum_bars"][tf] = json!(1);
     }
@@ -16,10 +15,10 @@ fn offline_run_is_reproducible_and_refuses_overwrite() {
     fs::write(root.join("rules.json"), cfg.to_string()).unwrap();
     let start = forex_core::prices::utc("2025-12-01T00:00:00Z").unwrap();
     let end = forex_core::prices::utc("2026-01-02T00:00:00Z").unwrap();
-    let mut csv=String::from("timestamp_utc,timestamp_ms,bar_end_utc,bid_open,bid_high,bid_low,bid_close,ask_open,ask_high,ask_low,ask_close,quote_count,gap_before_minutes\n");
+    let mut csv=String::from("timestamp_utc,timestamp_ms,bar_end_utc,open,high,low,close,quote_count,gap_before_minutes\n");
     for t in (start..end).step_by(60) {
         csv.push_str(&format!(
-            "{},{},{},1.1,1.1,1.1,1.1,1.10001,1.10001,1.10001,1.10001,1,0\n",
+            "{},{},{},1.1,1.1,1.1,1.1,1,0\n",
             forex_core::prices::iso(t).unwrap(),
             t * 1000,
             forex_core::prices::iso(t + 60).unwrap()
@@ -30,11 +29,11 @@ fn offline_run_is_reproducible_and_refuses_overwrite() {
     let archive = root.join("raw/EURUSD-T-202601.zip");
     let mut z = zip::ZipWriter::new(fs::File::create(&archive).unwrap());
     z.start_file(
-        "DAT_ASCII_EURUSD_T_202601.csv",
+        "EURUSD-index-202601.csv",
         zip::write::FileOptions::default(),
     )
     .unwrap();
-    z.write_all(b"20260101 190000001,1.1,1.10001,0\n20260102 190000000,1.1,1.10001,0\n")
+    z.write_all(b"timestamp_ms,price\n1767312000001,1.1\n1767398400000,1.1\n")
         .unwrap();
     z.finish().unwrap();
     let hash = format!("{:x}", Sha256::digest(fs::read(&archive).unwrap()));
@@ -44,7 +43,7 @@ fn offline_run_is_reproducible_and_refuses_overwrite() {
             .to_string(),
     )
     .unwrap();
-    fs::write(root.join("quality-report.json"),json!({"source":"Synthetic test feed","timezone_conversion":"fixed EST UTC-05:00 to UTC; no DST","timestamp_reversals":[],"outputs":{"EURUSD.csv":{"sha256":mhash,"bytes":csv.len()}}}).to_string()).unwrap();
+    fs::write(root.join("quality-report.json"),json!({"source":"Synthetic test feed","timezone":"UTC","price_basis":"index","gaps":[],"outputs":{"EURUSD.csv":{"sha256":mhash,"bytes":csv.len()}}}).to_string()).unwrap();
     fs::write(
         root.join("sources.json"),
         json!({"EURUSD":[root.to_str().unwrap()]}).to_string(),
@@ -86,5 +85,29 @@ fn offline_run_is_reproducible_and_refuses_overwrite() {
     assert_eq!(result["coverage"]["EURUSD"]["ticks"], 1);
     assert!(!run("a").status.success());
     assert!(root.join("a/strategy.json").exists());
+    let quality = fs::read(root.join("quality-report.json")).unwrap();
+    let mut no_context: serde_json::Value = serde_json::from_slice(&quality).unwrap();
+    no_context["outputs"] = json!({});
+    fs::write(root.join("quality-report.json"), no_context.to_string()).unwrap();
+    let missing = run("missing-context");
+    assert!(!missing.status.success());
+    assert!(String::from_utf8_lossy(&missing.stderr).contains("insufficient W bars"));
+    fs::write(root.join("quality-report.json"), quality).unwrap();
+    let mut z = zip::ZipWriter::new(fs::File::create(&archive).unwrap());
+    z.start_file(
+        "EURUSD-index-202601.csv",
+        zip::write::FileOptions::default(),
+    )
+    .unwrap();
+    z.write_all(b"timestamp_ms,price\n").unwrap();
+    z.finish().unwrap();
+    let mut manifest: serde_json::Value =
+        serde_json::from_slice(&fs::read(root.join("manifest.json")).unwrap()).unwrap();
+    manifest["files"][0]["sha256"] =
+        json!(format!("{:x}", Sha256::digest(fs::read(&archive).unwrap())));
+    fs::write(root.join("manifest.json"), manifest.to_string()).unwrap();
+    let empty = run("missing-quotes");
+    assert!(!empty.status.success());
+    assert!(String::from_utf8_lossy(&empty.stderr).contains("no observed ticks"));
     fs::remove_dir_all(root).unwrap();
 }

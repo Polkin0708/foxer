@@ -1,4 +1,4 @@
-"""Public SQLite example creates an empty, usable v3 schema."""
+"""Public SQLite example creates an empty, usable v4 schema."""
 import sqlite3
 import unittest
 from pathlib import Path
@@ -10,7 +10,7 @@ class ExampleSchemaTests(unittest.TestCase):
         with sqlite3.connect(':memory:') as db:
             db.executescript(sql)
             self.assertEqual(db.execute('PRAGMA application_id').fetchone()[0], 1180190513)
-            self.assertEqual(db.execute('PRAGMA user_version').fetchone()[0], 3)
+            self.assertEqual(db.execute('PRAGMA user_version').fetchone()[0], 4)
             tables = {r[0] for r in db.execute(
                 "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")}
             self.assertEqual(tables, {'minutes', 'imports', 'inbox', 'entities', 'outbox'})

@@ -35,10 +35,8 @@ impl Ledger {
             if matches!(s.state, SignalState::Stop | SignalState::TakeProfit) {
                 let price = if s.state == SignalState::TakeProfit {
                     s.take_profit
-                } else if s.side == Side::Long {
-                    t.bid
                 } else {
-                    t.ask
+                    t.price
                 };
                 let sign = if s.side == Side::Long { 1.0 } else { -1.0 };
                 tr["exit"] = json!(price);
@@ -54,7 +52,7 @@ impl Ledger {
         for tr in &mut self.trades {
             if tr["symbol"] == symbol && tr["state"] == "Active" {
                 let long = tr["side"] == "Long";
-                let mark = if long { t.bid } else { t.ask };
+                let mark = t.price;
                 let entry = tr["entry"].as_i64().unwrap();
                 let stop = tr["stop"].as_i64().unwrap();
                 tr["unrealized_r"] = json!(

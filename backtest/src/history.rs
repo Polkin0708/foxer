@@ -1,4 +1,4 @@
-use chrono::{Datelike, NaiveDate, NaiveDateTime};
+use chrono::{Datelike, NaiveDate};
 use forex_core::{
     engine::{Engine, Timeframe},
     feed::{Aggregator, Tick},
@@ -10,7 +10,7 @@ use sha2::{Digest, Sha256};
 use std::{
     collections::{BTreeMap, VecDeque},
     fs::{self, File},
-    io::{BufRead, BufReader, Read},
+    io::Read,
     path::{Path, PathBuf},
 };
 pub fn hash(path: &Path) -> Result<String, String> {
@@ -36,11 +36,6 @@ pub fn json_file(path: &Path) -> Result<Value, String> {
     serde_json::from_slice(&fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?)
         .map_err(|e| e.to_string())
 }
-pub fn local_time(s: &str) -> Result<i64, String> {
-    NaiveDateTime::parse_from_str(s, "%Y%m%d %H%M")
-        .map(|d| (d.and_utc().timestamp() + 18000) * 1000)
-        .map_err(|_| "invalid archive timestamp".into())
-}
 pub fn read_archive(
     path: &Path,
     symbol: &str,
@@ -49,60 +44,45 @@ pub fn read_archive(
     gaps: &[(i64, i64)],
     mut visit: impl FnMut(Tick) -> Result<(), String>,
 ) -> Result<(), String> {
+    if source.trim().is_empty() {
+        return Err("missing data source".into());
+    }
     verify(path, expected)?;
     let mut zip = zip::ZipArchive::new(File::open(path).map_err(|e| e.to_string())?)
         .map_err(|e| e.to_string())?;
     let names: Vec<_> = zip
         .file_names()
-        .filter(|n| n.starts_with(&format!("DAT_ASCII_{symbol}_T_")) && n.ends_with(".csv"))
+        .filter(|n| n.starts_with(&format!("{symbol}-index-")) && n.ends_with(".csv"))
         .map(str::to_owned)
         .collect();
     if names.len() != 1 {
-        return Err("expected one symbol tick CSV in archive".into());
+        return Err("expected one symbol index CSV in archive".into());
     }
     let file = zip.by_name(&names[0]).map_err(|e| e.to_string())?;
-    let mut stream = BufReader::new(file);
-    let mut line = String::new();
+    let mut reader = csv::Reader::from_reader(file);
+    if reader
+        .headers()
+        .map_err(|e| e.to_string())?
+        .iter()
+        .ne(["timestamp_ms", "price"])
+    {
+        return Err("invalid index tick columns".into());
+    }
     let mut previous: Option<Tick> = None;
-    let mut minute = String::new();
-    let mut base = 0;
-    loop {
-        line.clear();
-        if stream.read_line(&mut line).map_err(|e| e.to_string())? == 0 {
-            break;
-        }
-        let fields: Vec<_> = line.trim().split(',').collect();
-        if fields.len() != 4 {
-            return Err("invalid tick columns".into());
-        }
-        let stamp = fields[0];
-        if !stamp.is_ascii() || stamp.len() != 18 {
-            return Err("invalid tick timestamp precision".into());
-        }
-        if stamp[..13] != minute {
-            minute = stamp[..13].into();
-            base = local_time(&minute)?;
-        }
-        let sec: i64 = stamp[13..15].parse().map_err(|_| "invalid tick seconds")?;
-        let ms: i64 = stamp[15..]
-            .parse()
-            .map_err(|_| "invalid tick milliseconds")?;
-        if !(0..60).contains(&sec) || !(0..1000).contains(&ms) {
-            return Err("invalid tick seconds".into());
-        }
-        let millis = base + sec * 1000 + ms;
-        if gaps.iter().any(|&(a, b)| millis >= a && millis < b) {
-            continue;
+    for row in reader.records() {
+        let row = row.map_err(|e| e.to_string())?;
+        let millis: i64 = row[0].parse().map_err(|_| "invalid index timestamp")?;
+        if millis < 0 {
+            return Err("invalid index timestamp".into());
         }
         let tick = Tick {
             symbol: symbol.into(),
             source: source.into(),
             millis,
-            bid: prices::price(fields[1])?,
-            ask: prices::price(fields[2])?,
+            price: prices::price(&row[1])?,
         };
-        if tick.ask < tick.bid {
-            return Err("crossed quote".into());
+        if gaps.iter().any(|&(a, b)| millis >= a && millis < b) {
+            continue;
         }
         if previous.as_ref().is_some_and(|p| p.millis > millis) {
             return Err("unordered quote outside quarantine".into());
@@ -145,26 +125,21 @@ impl Dataset {
                 return Err("mixed history sources for instrument".into());
             }
             source = Some(name.to_owned());
-            if q["timezone_conversion"] != "fixed EST UTC-05:00 to UTC; no DST" {
-                return Err("unsupported data provenance".into());
+            if q["timezone"] != "UTC" || q["price_basis"] != "index" {
+                return Err("expected UTC index history".into());
             }
             if q.get("symbol").is_some_and(|s| s != symbol) {
                 return Err("data symbol mismatch".into());
             }
-            for g in q["timestamp_reversals"]
+            for g in q["gaps"]
                 .as_array()
-                .ok_or("missing quarantine")?
+                .ok_or("missing index gap information")?
             {
-                let a = local_time(
-                    g["excluded_from_local_minute"]
-                        .as_str()
-                        .ok_or("invalid gap")?,
-                )?;
-                let b = local_time(
-                    g["excluded_through_local_minute"]
-                        .as_str()
-                        .ok_or("invalid gap")?,
-                )? + 60000;
+                let a = g["from_ms"].as_i64().ok_or("invalid gap")?;
+                let b = g["to_ms"].as_i64().ok_or("invalid gap")?;
+                if a < 0 || b <= a {
+                    return Err("invalid gap".into());
+                }
                 gaps.push((a, b));
             }
             let m = json_file(&root.join("manifest.json"))?;
@@ -179,8 +154,8 @@ impl Dataset {
                     NaiveDate::from_ymd_opt(d.year(), d.month() + 1, 1)
                 }
                 .ok_or("month overflow")?;
-                let start = (d.and_hms_opt(0, 0, 0).unwrap().and_utc().timestamp() + 18000) * 1000;
-                let end = (next.and_hms_opt(0, 0, 0).unwrap().and_utc().timestamp() + 18000) * 1000;
+                let start = (d.and_hms_opt(0, 0, 0).unwrap().and_utc().timestamp()) * 1000;
+                let end = (next.and_hms_opt(0, 0, 0).unwrap().and_utc().timestamp()) * 1000;
                 if start < to && end > from {
                     let rel = Path::new(f["file"].as_str().ok_or("missing archive path")?);
                     if rel.is_absolute()
@@ -203,7 +178,7 @@ impl Dataset {
         let mut covered = from;
         for a in &archives {
             if a.start > covered {
-                return Err("missing archive month in requested period".into());
+                return Err("missing index history in requested period".into());
             }
             if a.end <= covered {
                 return Err("overlapping archive month".into());
@@ -211,7 +186,7 @@ impl Dataset {
             covered = a.end;
         }
         if covered < to {
-            return Err("missing archive month in requested period".into());
+            return Err("missing index history in requested period".into());
         }
         gaps.sort_unstable();
         gaps.dedup();

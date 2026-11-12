@@ -131,7 +131,7 @@ fn rejects_unknown_fields_and_comment_types_at_all_depths() {
     for path in [
         "",
         "/policies/zones",
-        "/policies/execution/quote_sides/long",
+        "/policies/execution",
         "/parameters/plan_days",
         "/candles/weekly_boundary",
         "/instruments/0",
@@ -185,8 +185,8 @@ fn rejects_old_future_and_unsupported_policies() {
             "structure",
         ),
         (
-            "/policies/execution/quote_sides/long/entry",
-            json!("bid"),
+            "/policies/execution/entry_mode",
+            json!("unsupported_mode"),
             "structure",
         ),
         (

@@ -1,5 +1,5 @@
 {
-  "EURUSD": ["data/history/EURUSD"],
-  "GBPUSD": ["data/history/GBPUSD"],
-  "USDJPY": ["data/history/USDJPY"]
+  "EURUSD": ["data/index-history/EURUSD"],
+  "GBPUSD": ["data/index-history/GBPUSD"],
+  "USDJPY": ["data/index-history/USDJPY"]
 }

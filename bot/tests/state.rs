@@ -46,7 +46,7 @@ fn state_and_pending_delivery_survive_restart_without_reapplying_event() {
     assert!(s
         .apply(
             "quote:1",
-            &json!({"bid":1}),
+            &json!({"price":1}),
             &[entity("p1")],
             &[message("m1")]
         )
@@ -56,7 +56,7 @@ fn state_and_pending_delivery_survive_restart_without_reapplying_event() {
     assert!(!s
         .apply(
             "quote:1",
-            &json!({"bid":1}),
+            &json!({"price":1}),
             &[entity("p1")],
             &[message("m1")]
         )
@@ -107,12 +107,12 @@ fn queue_order_and_updates_are_stable_across_restart() {
     );
 }
 #[test]
-fn migrates_v1_without_losing_historical_data() {
+fn old_schema_is_not_migrated_or_modified() {
     let f = Fixture::new();
     let c = rusqlite::Connection::open(f.db()).unwrap();
     c.execute_batch("PRAGMA application_id=1180190513;PRAGMA user_version=1;CREATE TABLE minutes(source TEXT,timestamp INTEGER,payload TEXT,PRIMARY KEY(source,timestamp));CREATE TABLE imports(digest TEXT PRIMARY KEY,report TEXT);INSERT INTO imports VALUES('old','{}');").unwrap();
     drop(c);
-    drop(Store::open(&f.db()).unwrap());
+    assert!(Store::open(&f.db()).is_err());
     let c = rusqlite::Connection::open(f.db()).unwrap();
     assert_eq!(
         c.query_row("SELECT digest FROM imports", [], |r| r.get::<_, String>(0))
@@ -122,7 +122,7 @@ fn migrates_v1_without_losing_historical_data() {
     assert_eq!(
         c.query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
             .unwrap(),
-        3
+        1
     );
 }
 #[test]

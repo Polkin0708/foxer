@@ -70,9 +70,6 @@ pub fn run(o: Options) -> Result<(), String> {
     let bytes = fs::read(&o.strategy).map_err(|e| e.to_string())?;
     let cfg: Strategy = serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
     forex_core::validate(&cfg)?;
-    if cfg.candles.price_basis != "bid" {
-        return Err("Bid/Ask archives require candles.price_basis=bid; Upscale index history is not available".into());
-    }
     let selected: Vec<_> = cfg
         .instruments
         .iter()
@@ -212,7 +209,7 @@ pub fn run(o: Options) -> Result<(), String> {
                 m.bars.entry(format!("{tf:?}")).or_default().push(json!(b));
             }
             for event in batch.changes {
-                writeln!(journal,"{}",json!({"sequence":sequence,"millis":t.millis,"symbol":symbol,"bid":t.bid,"ask":t.ask,"change":event})).map_err(|e|e.to_string())?;
+                writeln!(journal,"{}",json!({"sequence":sequence,"millis":t.millis,"symbol":symbol,"price":t.price,"change":event})).map_err(|e|e.to_string())?;
             }
         }
         m.head = next(&m.rx)?;
@@ -296,7 +293,7 @@ pub fn run(o: Options) -> Result<(), String> {
         .enumerate()
         .map(|(i, s)| (s.clone(), markets[i].coverage.clone()))
         .collect();
-    let result = json!({"schema_version":1,"engine_version":env!("CARGO_PKG_VERSION"),"program_sha256":history::hash(&std::env::current_exe().map_err(|e|e.to_string())?)?,"strategy_sha256":format!("{:x}",Sha256::digest(&bytes)),"from":o.from,"to":o.to,"symbols":selected,"sample_seed":20261110,"initial_context":initial,"sources":sources,"coverage":coverage,"summary":ledger.summary(),"by_symbol":by_symbol,"monthly":monthly,"gap_affected_summary":stats(&affected),"trades":ledger.trades,"examples":chosen_examples,"execution":{"market":"first observed bid/ask","limit":"level without improvement","stop":"observed exit-side quote","target":"level without improvement","costs":"spread only","gaps":"observed ticks only; affected trades flagged","drawdown":"closed trades only"}});
+    let result = json!({"schema_version":1,"engine_version":env!("CARGO_PKG_VERSION"),"program_sha256":history::hash(&std::env::current_exe().map_err(|e|e.to_string())?)?,"strategy_sha256":format!("{:x}",Sha256::digest(&bytes)),"from":o.from,"to":o.to,"symbols":selected,"sample_seed":20261110,"initial_context":initial,"sources":sources,"coverage":coverage,"summary":ledger.summary(),"by_symbol":by_symbol,"monthly":monthly,"gap_affected_summary":stats(&affected),"trades":ledger.trades,"examples":chosen_examples,"execution":{"market":"first observed index price","limit":"level without improvement","stop":"observed index price","target":"level without improvement","costs":"not modeled","gaps":"observed ticks only; affected trades flagged","drawdown":"closed trades only"}});
     write_json(&o.output.join("results.json"), &result)?;
     let mut csv = csv::Writer::from_path(o.output.join("trades.csv")).map_err(|e| e.to_string())?;
     let fields = [

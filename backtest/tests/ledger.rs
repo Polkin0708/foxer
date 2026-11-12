@@ -4,13 +4,12 @@ use forex_core::{
     processing::Change,
     trading::{Side, Signal, SignalState},
 };
-fn tick(ms: i64, bid: i64, ask: i64) -> Tick {
+fn tick(ms: i64, price: i64) -> Tick {
     Tick {
         symbol: "EURUSD".into(),
         source: "test".into(),
         millis: ms,
-        bid,
-        ask,
+        price,
     }
 }
 fn change(side: Side, state: SignalState, previous: Option<SignalState>) -> Change {
@@ -30,16 +29,16 @@ fn change(side: Side, state: SignalState, previous: Option<SignalState>) -> Chan
     }
 }
 #[test]
-fn stop_gap_uses_exit_side_and_milliseconds() {
+fn stop_gap_uses_index_price_and_milliseconds() {
     let mut l = Ledger::default();
     l.observe(
         "EURUSD",
-        &tick(1001, 99, 100),
+        &tick(1001, 99),
         &[change(Side::Long, SignalState::Active, None)],
     );
     l.observe(
         "EURUSD",
-        &tick(1002, 85, 86),
+        &tick(1002, 85),
         &[change(
             Side::Long,
             SignalState::Stop,
@@ -56,12 +55,12 @@ fn short_take_profit_fills_level_without_improvement() {
     let mut l = Ledger::default();
     l.observe(
         "EURUSD",
-        &tick(1001, 100, 101),
+        &tick(1001, 100),
         &[change(Side::Short, SignalState::Active, None)],
     );
     l.observe(
         "EURUSD",
-        &tick(1002, 75, 76),
+        &tick(1002, 75),
         &[change(
             Side::Short,
             SignalState::TakeProfit,
@@ -78,10 +77,10 @@ fn empty_and_open_are_not_closed_results() {
     assert!(l.summary()["profit_factor"].is_null());
     l.observe(
         "EURUSD",
-        &tick(1001, 99, 100),
+        &tick(1001, 99),
         &[change(Side::Long, SignalState::Active, None)],
     );
-    l.observe("EURUSD", &tick(2001, 105, 106), &[]);
+    l.observe("EURUSD", &tick(2001, 105), &[]);
     assert_eq!(l.summary()["closed"], 0);
     assert_eq!(l.trades[0]["unrealized_r"], 0.5);
 }
@@ -91,13 +90,13 @@ fn pending_cancel_never_becomes_a_trade_and_gap_is_recorded() {
     let mut l = Ledger::default();
     l.observe(
         "EURUSD",
-        &tick(1001, 104, 105),
+        &tick(1001, 104),
         &[change(Side::Long, SignalState::Pending, None)],
     );
     l.gap("EURUSD", 1002, 2000);
     l.observe(
         "EURUSD",
-        &tick(2001, 85, 86),
+        &tick(2001, 85),
         &[change(
             Side::Long,
             SignalState::Cancelled,

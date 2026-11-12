@@ -1,4 +1,4 @@
-//! Read-only Upscale index-price snapshots, separate from Bid/Ask ticks.
+//! Read-only Upscale index-price snapshots.
 use serde::Serialize;
 use serde_json::Value;
 
@@ -291,8 +291,8 @@ impl IndexQuote {
         Ok(crate::feed::Tick {
             symbol: self.symbol.clone(),
             millis: self.millis,
-            bid: price,
-            ask: price,
+            price,
+
             source: "upscale:index".into(),
         })
     }

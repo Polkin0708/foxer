@@ -26,9 +26,9 @@ fn summer_h4_closes_at_new_york_boundary() {
     let tick = |t| Tick {
         symbol: "EURUSD".into(),
         millis: t * 1000,
-        bid: 100,
-        ask: 101,
-        source: "test".into(),
+        price: 100,
+
+        source: "upscale:index".into(),
     };
     a.push(tick(start)).unwrap();
     let bars = a.push(tick(start + 14400)).unwrap();
@@ -45,8 +45,7 @@ fn fractional_rr_is_not_truncated_and_rounds_protectively() {
         Side::Long,
         Quote {
             time: 1,
-            bid: 110,
-            ask: 111,
+            price: 111,
         },
         100,
         135,
@@ -60,8 +59,7 @@ fn fractional_rr_is_not_truncated_and_rounds_protectively() {
         Side::Short,
         Quote {
             time: 1,
-            bid: 109,
-            ask: 110,
+            price: 109,
         },
         120,
         85,
@@ -105,8 +103,7 @@ fn pending_engine(side: Side, ifvg: bool) -> Engine {
         side,
         Quote {
             time: 10,
-            bid: 110,
-            ask: 111,
+            price: 110,
         },
         if side == Side::Long { 90 } else { 130 },
         if side == Side::Long { 120 } else { 100 },
@@ -138,23 +135,13 @@ fn expiry_precedes_fill_and_survives_restart() {
     let c = small_config();
     let mut e = pending_engine(Side::Long, false);
     let t = 10 + c.parameters.plan_days.value as i64 * 86400;
-    e.quote(
-        Quote {
-            time: t,
-            bid: 99,
-            ask: 100,
-        },
-        1,
-        &c,
-    )
-    .unwrap();
+    e.quote(Quote { time: t, price: 99 }, 1, &c).unwrap();
     assert_eq!(e.signals()[0].state, SignalState::Cancelled);
     let mut e: Engine = serde_json::from_value(serde_json::to_value(e).unwrap()).unwrap();
     e.quote(
         Quote {
             time: t + 1,
-            bid: 99,
-            ask: 100,
+            price: 99,
         },
         1,
         &c,
@@ -383,21 +370,12 @@ fn ifvg_limit_checks_final_price_and_all_range_edges_for_both_sides() {
             let mut v = serde_json::to_value(ready_ifvg(side, close)).unwrap();
             v["frames"]["D"]["fractals"][0]["price"] = json!(mirror(target));
             let mut e: Engine = serde_json::from_value(v).unwrap();
-            let bid = if side == Side::Long {
+            let price = if side == Side::Long {
                 mirror(target) - 2
             } else {
                 mirror(target) + 1
             };
-            e.quote(
-                Quote {
-                    time: 11,
-                    bid,
-                    ask: bid + 1,
-                },
-                1,
-                &c,
-            )
-            .unwrap();
+            e.quote(Quote { time: 11, price }, 1, &c).unwrap();
             assert_eq!(
                 !e.signals().is_empty(),
                 allowed,
@@ -425,8 +403,7 @@ fn different_plan_kinds_use_their_own_fractional_caps() {
         e.quote(
             Quote {
                 time: 11,
-                bid: 103,
-                ask: 104,
+                price: 104,
             },
             1,
             &c,
