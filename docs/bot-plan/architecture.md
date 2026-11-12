@@ -400,6 +400,7 @@ OpenAI получает документ с пояснениями и катал
 | `trend_system.weekly_rules[].{message,action}` | `messages.<ID>`; текст сохранён, поведение перехода задаёт ID |
 | `trend_system.daily_rules.precondition` | `policies.plans.daily_requires_weekly_trend`, `daily_poi` и `context.minimum_bars` |
 | `trend_system.daily_rules.rules[].id` | `policies.plans.daily_rules[]` |
+| — | `policies.plans.disabled_rules[]` — необязательный список правил, которые не создают планы: `W_point_A`, `D_correction_start`, `D_correction_end`, `D_continuation_from_weekly_zone`, `D_correction_after_weekly_fractal`. По умолчанию пуст. Побочные эффекты правила (wzone, wfrac, тренд) сохраняются |
 | `trend_system.daily_rules.rules[].{when,action,plan.*,status,target,meaning,note,side_effect}` | Фиксированная семантика соответствующего ID; POI — `policies.plans.{daily_poi,weekly_poi}`, цели — policies.targets, отключение — policies.modules |
 | `W_fractal_swept.when` (число недель) | `parameters.weekly_fractal_sweep_lookback_bars.value` |
 | `D_correction_start.extra` | Удалено: отметка дневного фрактала за 30 баров не реализована |

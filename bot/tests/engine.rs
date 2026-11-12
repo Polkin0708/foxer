@@ -469,3 +469,86 @@ fn explicit_confirmation_window_includes_inverted_zone_boundary_only() {
         );
     }
 }
+
+fn seeded_correction(c: &forex_bot::model::Strategy) -> serde_json::Value {
+    let mut e = Engine::default();
+    for tf in [Timeframe::W, Timeframe::D] {
+        for b in [
+            bar(1, 100, 110, 90, 105),
+            bar(2, 105, 125, 100, 120),
+            bar(3, 125, 135, 120, 130),
+        ] {
+            e.seed(tf, b, c).unwrap();
+        }
+    }
+    e.closed(Timeframe::D, bar(4, 130, 135, 90, 95), c).unwrap();
+    serde_json::to_value(&e).unwrap()
+}
+
+#[test]
+fn disabled_rule_does_not_create_plans_and_other_rules_are_unaffected() {
+    let rules = |s: &serde_json::Value| -> Vec<String> {
+        s["plans"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|p| p["rule"].as_str().unwrap().to_owned())
+            .collect()
+    };
+    let enabled = rules(&seeded_correction(&cfg()));
+    assert!(enabled.contains(&"D_correction_start".to_owned()));
+    let mut c = cfg();
+    c.policies.plans.disabled_rules =
+        serde_json::from_value(serde_json::json!(["D_correction_start"])).unwrap();
+    let disabled = rules(&seeded_correction(&c));
+    assert!(!disabled.contains(&"D_correction_start".to_owned()));
+    let mut expected = enabled.clone();
+    expected.retain(|r| r != "D_correction_start");
+    assert_eq!(disabled, expected);
+    let mut c = cfg();
+    c.policies.plans.disabled_rules =
+        serde_json::from_value(serde_json::json!(["W_point_A"])).unwrap();
+    assert_eq!(
+        rules(&seeded_correction(&c)),
+        enabled
+            .into_iter()
+            .filter(|r| r != "W_point_A")
+            .collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn disabled_rules_accepts_only_unique_plan_rules_and_defaults_to_empty() {
+    let base: serde_json::Value =
+        serde_json::from_slice(&std::fs::read("../strategy/fvg-bot-rules.json").unwrap()).unwrap();
+    let load = |v: &serde_json::Value| {
+        let p = std::env::temp_dir().join(format!("disabled-rules-{}.json", std::process::id()));
+        std::fs::write(&p, v.to_string()).unwrap();
+        let r = forex_bot::load(&p);
+        std::fs::remove_file(&p).unwrap();
+        r
+    };
+    let mut v = base.clone();
+    v["policies"]["plans"]
+        .as_object_mut()
+        .unwrap()
+        .remove("disabled_rules");
+    assert!(load(&v).unwrap().policies.plans.disabled_rules.is_empty());
+    for bad in [
+        serde_json::json!(["W_fractal_swept"]),
+        serde_json::json!(["D_point_A"]),
+        serde_json::json!(["W_point_A", "W_point_A"]),
+        serde_json::json!(["nonexistent"]),
+    ] {
+        let mut v = base.clone();
+        v["policies"]["plans"]["disabled_rules"] = bad.clone();
+        assert!(load(&v).is_err(), "accepted {bad}");
+    }
+    let mut v = base;
+    v["policies"]["plans"]["disabled_rules"] = serde_json::json!([
+        "W_point_A",
+        "D_continuation_from_weekly_zone",
+        "D_correction_end"
+    ]);
+    assert_eq!(load(&v).unwrap().policies.plans.disabled_rules.len(), 3);
+}

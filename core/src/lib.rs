@@ -142,6 +142,14 @@ pub fn validate(c: &Strategy) -> Result<(), String> {
             return Err(format!("rule: missing or duplicate policy: {path}"));
         }
     }
+    let mut disabled = HashSet::new();
+    for r in &c.policies.plans.disabled_rules {
+        let name = serde_json::to_value(r).map_err(|_| "rule serialization")?;
+        let name = name.as_str().unwrap_or("");
+        if !crate::engine::PLAN_RULES.contains(&name) || !disabled.insert(name.to_owned()) {
+            return Err("rule: invalid or duplicate disabled rule".into());
+        }
+    }
     if [
         &c.messages.w_trend_new,
         &c.messages.w_trend_end,
