@@ -53,6 +53,31 @@ fn main() -> ExitCode {
             }
         };
     }
+    if args.len() == 6 && args[0] == "prepare-mt5" {
+        let result = args[4]
+            .to_str()
+            .and_then(|s| s.parse::<i64>().ok())
+            .ok_or_else(|| "invalid ask spread".to_owned())
+            .and_then(|spread| {
+                forex_bot::mt5::prepare_mt5(
+                    Path::new(&args[1]),
+                    Path::new(&args[2]),
+                    args[3].to_str().unwrap_or(""),
+                    spread,
+                    args[5].to_str().unwrap_or(""),
+                )
+            });
+        return match result {
+            Ok(v) => {
+                println!("{v}");
+                ExitCode::SUCCESS
+            }
+            Err(e) => {
+                eprintln!("{e}");
+                ExitCode::from(1)
+            }
+        };
+    }
     if args.len() == 4 && args[0] == "import-history" {
         return match forex_bot::data::import_history_symbol(
             Path::new(&args[1]),

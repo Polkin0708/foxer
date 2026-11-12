@@ -136,7 +136,9 @@ pub fn import_history_symbol(path: &Path, root: &Path, symbol: &str) -> Result<V
         .as_str()
         .filter(|s| !s.trim().is_empty())
         .ok_or("missing data source")?;
-    if report["timezone_conversion"] != "fixed EST UTC-05:00 to UTC; no DST"
+    let conversion = report["timezone_conversion"].as_str().unwrap_or("");
+    if !(conversion == "fixed EST UTC-05:00 to UTC; no DST"
+        || conversion == crate::mt5::TIMEZONE_CONVERSION)
         || !report["timestamp_reversals"].is_array()
         || !report["missing_months"].is_array()
     {

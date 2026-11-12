@@ -4,6 +4,7 @@ pub use forex_core::{
 pub mod data;
 pub mod feed;
 pub mod http;
+pub mod mt5;
 pub mod protocols;
 pub mod runtime;
 pub mod service;
