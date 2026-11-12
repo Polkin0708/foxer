@@ -5,7 +5,8 @@ use forex_core::{
 };
 #[test]
 fn shared_processing_matches_existing_sequence_and_snapshot() {
-    let cfg = forex_core::load(std::path::Path::new("../strategy/fvg-bot-rules.json")).unwrap();
+    let mut cfg = forex_core::load(std::path::Path::new("../strategy/fvg-bot-rules.json")).unwrap();
+    cfg.candles.price_basis = "bid".into(); // Existing Bid/Ask sequence.
     let mut old = Engine::default();
     let mut new = Engine::default();
     let mut a = Aggregator::default();

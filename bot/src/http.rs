@@ -23,15 +23,6 @@ pub struct Api {
     client: Client,
 }
 impl Api {
-    pub fn market(&self, symbol: &str) -> Result<Value, Failure> {
-        Self::json(
-            self.client
-                .get(format!("https://biquote.io/api/{symbol}"))
-                .send()
-                .map_err(|_| Failure::Retry)?,
-        )
-    }
-
     pub fn new() -> Result<Self, Failure> {
         let client = Client::builder()
             .connect_timeout(Duration::from_secs(10))

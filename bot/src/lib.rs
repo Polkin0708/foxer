@@ -9,3 +9,5 @@ pub mod runtime;
 pub mod service;
 pub mod settings;
 pub mod state;
+
+pub mod upscale;

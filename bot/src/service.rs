@@ -1,6 +1,6 @@
 use crate::{
     engine::{Engine, Timeframe},
-    feed::{self, Tick},
+    feed::Tick,
     http::{Api, Failure},
     protocols::{self, Analysis, Comment, Image},
     runtime::Runtime,
@@ -85,21 +85,10 @@ pub fn probe(path: &Path) -> Result<String, String> {
     if !matches!(chat["type"].as_str(), Some("group" | "supergroup")) {
         return Err("configured Telegram chat is not a group".into());
     }
-    let cfg = crate::load(&c.strategy)?;
-    for item in cfg.instruments {
-        let market = api
-            .market(&item.symbol)
-            .map_err(|e| format!("Biquote {}: {e}", item.symbol))?;
-        let tick = feed::parse_tick(&market)?;
-        if tick.symbol != item.symbol {
-            return Err("market symbol mismatch".into());
-        }
-    }
-    Ok("Telegram access and all configured Biquote snapshots OK; OpenAI not called.".into())
-}
-fn initial_engine(database: &Path, strategy: &Path, symbol: &str) -> Result<Engine, String> {
-    let cfg = crate::load(strategy)?;
-    history_engine(database, &cfg, symbol)
+    let snapshots = crate::upscale::probe(path)?;
+    Ok(format!(
+        "Telegram access OK; Upscale index snapshots: {snapshots}; OpenAI not called."
+    ))
 }
 pub(crate) fn history_engine(
     database: &Path,
@@ -152,12 +141,14 @@ pub fn prepare_state(database: &Path, strategy: &Path) -> Result<String, String>
         return Err("existing database required".into());
     }
     let cfg = crate::load(strategy)?;
+    if cfg.candles.price_basis == "index" {
+        return Err(
+            "index source starts with a new database; Bid history cannot seed index candles".into(),
+        );
+    }
     let mut runtime = Runtime::open_file(database, strategy, Engine::default())?;
     for item in &cfg.instruments {
-        runtime.seed_instrument(
-            &item.symbol,
-            initial_engine(database, strategy, &item.symbol)?,
-        )?;
+        runtime.seed_instrument(&item.symbol, history_engine(database, &cfg, &item.symbol)?)?;
     }
     Ok(format!(
         "Existing SQLite updated in place; rules loaded from JSON; {} instruments.",
@@ -243,81 +234,104 @@ enum Event {
     Updates(Result<Value, Failure>),
     Sent(String, Result<Value, Failure>),
     Analyzed(i64, Result<(Analysis, Value), Failure>),
-    Market(String, Result<Value, Failure>),
+    MarketState(String, bool),
+    QuoteError(String),
 }
-fn feed_worker(tx: mpsc::SyncSender<Event>, symbols: Vec<String>) {
+fn feed_worker(
+    tx: mpsc::SyncSender<Event>,
+    symbols: Vec<String>,
+    client: crate::upscale::Client,
+    account: String,
+    stale_seconds: i64,
+) {
     loop {
-        let result = (|| -> Result<(), ()> {
-            let (mut socket, _) =
-                tungstenite::connect("wss://biquote.io/hubs/tick").map_err(|_| ())?;
-            match socket.get_mut() {
-                tungstenite::stream::MaybeTlsStream::Plain(s) => {
-                    s.set_read_timeout(Some(Duration::from_secs(30)))
-                        .map_err(|_| ())?;
-                }
-                tungstenite::stream::MaybeTlsStream::Rustls(s) => {
-                    s.sock
-                        .set_read_timeout(Some(Duration::from_secs(30)))
-                        .map_err(|_| ())?;
-                }
-                _ => return Err(()),
-            }
-            socket
-                .send(tungstenite::Message::Text(
-                    "{\"protocol\":\"json\",\"version\":1}\u{1e}".into(),
-                ))
-                .map_err(|_| ())?;
-            let handshake = socket.read().map_err(|_| ())?;
-            feed::parse_frames(handshake.to_text().map_err(|_| ())?).map_err(|_| ())?;
-            let subscription =
-                json!({"type":1,"invocationId":"1","target":"Subscribe","arguments":[symbols]});
-            socket
-                .send(tungstenite::Message::Text(format!("{subscription}\u{1e}")))
-                .map_err(|_| ())?;
-            let mut heartbeat = Instant::now();
-            loop {
-                let message = socket.read().map_err(|_| ())?;
-                if message.is_close() {
-                    return Err(());
-                }
-                if let tungstenite::Message::Text(text) = message {
-                    for tick in feed::parse_frames(&text).map_err(|_| ())? {
-                        if symbols.contains(&tick.symbol) {
-                            tx.send(Event::Tick(tick)).map_err(|_| ())?;
+        let mut delay = 2;
+        match client.markets(&account) {
+            Ok(value) => {
+                let now_ms = std::time::SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .ok()
+                    .and_then(|d| i64::try_from(d.as_millis()).ok())
+                    .unwrap_or(-1);
+                for symbol in &symbols {
+                    match crate::upscale::parse_quotes(
+                        &value,
+                        std::slice::from_ref(symbol),
+                        now_ms,
+                        stale_seconds,
+                    ) {
+                        Ok(quotes) => {
+                            let q = &quotes[0];
+                            let closed = q.closed || q.paused;
+                            if tx.send(Event::MarketState(symbol.clone(), closed)).is_err() {
+                                return;
+                            }
+                            if !closed {
+                                match q.to_tick() {
+                                    Ok(t) => {
+                                        if tx.send(Event::Tick(t)).is_err() {
+                                            return;
+                                        }
+                                    }
+                                    Err(_) => {
+                                        if tx.send(Event::QuoteError(symbol.clone())).is_err() {
+                                            return;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        Err(error) => {
+                            eprintln!("{symbol}: {error}");
+                            if tx.send(Event::QuoteError(symbol.clone())).is_err() {
+                                return;
+                            }
                         }
                     }
                 }
-                if heartbeat.elapsed() >= Duration::from_secs(15) {
-                    socket
-                        .send(tungstenite::Message::Text("{\"type\":6}\u{1e}".into()))
-                        .map_err(|_| ())?;
-                    heartbeat = Instant::now();
+            }
+            Err(error) => {
+                delay = match error {
+                    crate::upscale::Error::Http {
+                        status: 429,
+                        retry_after_seconds,
+                    } => retry_after_seconds.unwrap_or(60).max(2),
+                    _ => 5,
+                };
+                eprintln!("{error}");
+                if tx.send(Event::FeedDown).is_err() {
+                    return;
                 }
             }
-        })();
-        if result.is_err() && tx.send(Event::FeedDown).is_err() {
-            return;
         }
-        thread::sleep(Duration::from_secs(5));
+        thread::sleep(Duration::from_secs(delay));
     }
 }
 pub fn run(path: &Path) -> Result<String, String> {
     let c = Settings::load(path)?;
     let cfg = crate::load(&c.strategy)?;
     let symbols: Vec<String> = cfg.instruments.iter().map(|i| i.symbol.clone()).collect();
-    let mut runtime = Runtime::open_file(&c.database, &c.strategy, Engine::default())?;
-    for symbol in &symbols {
-        runtime.seed_instrument(symbol, initial_engine(&c.database, &c.strategy, symbol)?)?;
+    if cfg.candles.price_basis != "index" {
+        return Err("run requires candles.price_basis=index for Upscale".into());
     }
+    let key = c.upscale_key.as_deref().ok_or("missing UPSCALE_API_KEY")?;
+    let client =
+        crate::upscale::Client::new(crate::upscale::BASE_URL, key).map_err(|e| e.to_string())?;
+    let accounts = client.demo_accounts().map_err(|e| e.to_string())?;
+    if accounts.len() != 1 {
+        return Err("expected exactly one active API-enabled demo account".into());
+    }
+    let account = accounts[0].clone();
+    let mut runtime = Runtime::open_file(&c.database, &c.strategy, Engine::default())?;
     runtime.started(now())?;
     let (tx, rx) = mpsc::sync_channel(1024);
     let feed_tx = tx.clone();
     let subscribed = symbols.clone();
-    thread::spawn(move || feed_worker(feed_tx, subscribed));
-    let (mut poll_busy, mut send_busy, mut api_busy, mut market_busy) =
-        (false, false, false, false);
+    let stale_seconds = c.stale_seconds;
+    thread::spawn(move || feed_worker(feed_tx, subscribed, client, account, stale_seconds));
+    let (mut poll_busy, mut send_busy, mut api_busy) = (false, false, false);
     let start = Instant::now();
-    let (mut poll_at, mut send_at, mut api_at, mut market_at) = (start, start, start, start);
+    let (mut poll_at, mut send_at, mut api_at) = (start, start, start);
     let mut market_closed: std::collections::BTreeMap<String, bool> =
         symbols.iter().map(|s| (s.clone(), false)).collect();
     let mut last_tick: std::collections::BTreeMap<String, Instant> = symbols
@@ -389,12 +403,12 @@ pub fn run(path: &Path) -> Result<String, String> {
     Err(e)=>{eprintln!("OpenAI job: {e}");runtime.api_outage()?;}
    }
             }
-            Ok(Event::Market(symbol, result)) => {
-                market_busy = false;
-                market_at = Instant::now() + Duration::from_secs(60);
-                if let Ok(v) = result {
-                    market_closed.insert(symbol, v["marketState"] == "closed");
-                }
+            Ok(Event::MarketState(symbol, closed)) => {
+                market_closed.insert(symbol, closed);
+            }
+            Ok(Event::QuoteError(symbol)) => {
+                market_closed.insert(symbol.clone(), false);
+                runtime.disconnected_symbol(&symbol)?;
             }
             Err(mpsc::RecvTimeoutError::Timeout) => {}
             Err(_) => return Err("service workers disconnected".into()),
@@ -409,17 +423,6 @@ pub fn run(path: &Path) -> Result<String, String> {
             {
                 runtime.disconnected_symbol(symbol)?;
             }
-        }
-        if !market_busy && time >= market_at {
-            market_busy = true;
-            let tx = tx.clone();
-            let instruments = symbols.clone();
-            thread::spawn(move || {
-                for symbol in instruments {
-                    let result = Api::new().and_then(|api| api.market(&symbol));
-                    let _ = tx.send(Event::Market(symbol, result));
-                }
-            });
         }
         if !poll_busy && time >= poll_at {
             poll_busy = true;
@@ -534,6 +537,7 @@ mod tests {
             model: "fixture-model".into(),
             telegram_token: "fixture-token".into(),
             openai_key: "fixture-key".into(),
+            upscale_key: None,
             max_tokens: 1000,
             database: dir.join("db.sqlite"),
             strategy: "unused".into(),

@@ -25,6 +25,18 @@ fn main() -> ExitCode {
             }
         };
     }
+    if args.len() == 2 && args[0] == "probe-upscale" {
+        return match forex_bot::upscale::probe(Path::new(&args[1])) {
+            Ok(message) => {
+                println!("{message}");
+                ExitCode::SUCCESS
+            }
+            Err(error) => {
+                eprintln!("{error}");
+                ExitCode::from(1)
+            }
+        };
+    }
     if args.len() == 3 && args[0] == "prepare-state" {
         return match forex_bot::service::prepare_state(Path::new(&args[1]), Path::new(&args[2])) {
             Ok(v) => {

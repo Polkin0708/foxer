@@ -17,7 +17,10 @@ fn path() -> PathBuf {
     ))
 }
 fn rules() -> Value {
-    serde_json::from_str(include_str!("../../strategy/fvg-bot-rules.json")).unwrap()
+    let mut v: Value =
+        serde_json::from_str(include_str!("../../strategy/fvg-bot-rules.json")).unwrap();
+    v["candles"]["price_basis"] = json!("bid"); // These fixtures exercise legacy Bid/Ask behavior.
+    v
 }
 fn open_test(p: &std::path::Path) -> Result<Runtime, String> {
     let file = p.with_extension("json");

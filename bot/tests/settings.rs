@@ -30,3 +30,34 @@ fn quotes_are_literal_and_not_shell_expanded() {
 fn global_price_tick_is_not_required_when_instrument_ticks_are_in_json() {
     assert!(Settings::parse(&valid().replace("PRICE_TICK=1\n", "")).is_ok());
 }
+
+#[test]
+fn optional_upscale_key_does_not_block_existing_service_settings() {
+    for suffix in [
+        "",
+        "UPSCALE_API_KEY=fake-upscale-key\n",
+        "UPSCALE_API_KEY='fake-upscale-key'\n",
+    ] {
+        assert!(Settings::parse(&format!("{}{suffix}", valid())).is_ok());
+    }
+}
+
+#[test]
+fn upscale_key_preserves_strict_validation_without_exposing_values() {
+    for (suffix, expected) in [
+        ("UPSCALE_API_KEY=\n", "missing setting: UPSCALE_API_KEY"),
+        ("UPSCALE_API_KEY=''\n", "missing setting: UPSCALE_API_KEY"),
+        (
+            "UPSCALE_API_KEY=fake-upscale-key\nUPSCALE_API_KEY=other-private-value\n",
+            "duplicate setting: UPSCALE_API_KEY",
+        ),
+        ("UPSCALE_API_KE=fake-upscale-key\n", "unknown setting name"),
+    ] {
+        let error = Settings::parse(&format!("{}{suffix}", valid()))
+            .err()
+            .expect("must reject");
+        assert_eq!(error, expected);
+        assert!(!error.contains("fake-upscale-key"));
+        assert!(!error.contains("other-private-value"));
+    }
+}

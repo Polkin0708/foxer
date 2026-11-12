@@ -70,6 +70,9 @@ pub fn run(o: Options) -> Result<(), String> {
     let bytes = fs::read(&o.strategy).map_err(|e| e.to_string())?;
     let cfg: Strategy = serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
     forex_core::validate(&cfg)?;
+    if cfg.candles.price_basis != "bid" {
+        return Err("Bid/Ask archives require candles.price_basis=bid; Upscale index history is not available".into());
+    }
     let selected: Vec<_> = cfg
         .instruments
         .iter()

@@ -27,7 +27,7 @@
       21
     ],
     "only_closed_bars": true,
-    "price_basis": "bid",
+    "price_basis": "index",
     "timezone": "America/New_York",
     "weekly_boundary": {
       "time": "17:00",
@@ -214,7 +214,7 @@
       },
       "limit_entry": "solve_rr_min_keep_stop_target",
       "pending_zone_break": "h4_close_beyond_inverted_zone_with_atr_margin",
-      "comment": "Порядок исполнения — по наблюдаемым котировкам. Формула лимита реализована в коде; RR берётся из parameters.",
+      "comment": "В режиме index оба технических слота Bid/Ask равны индексной цене Upscale; спред не моделируется. Сигналы не подтверждают исполнение ордеров.",
       "entry_mode": "auto"
     },
     "targets": {

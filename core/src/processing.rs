@@ -23,6 +23,9 @@ pub fn process(
     c: &Strategy,
     allow: bool,
 ) -> Result<Batch, String> {
+    if c.candles.price_basis == "index" && (t.source != "upscale:index" || t.bid != t.ask) {
+        return Err("index strategy requires Upscale index ticks".into());
+    }
     let step = c
         .instruments
         .iter()

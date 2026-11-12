@@ -16,6 +16,8 @@ use std::{
 #[derive(Clone, Serialize, Deserialize)]
 struct Snapshot {
     #[serde(default)]
+    price_basis: String,
+    #[serde(default)]
     calendar_version: u32,
     #[serde(default)]
     hash_version: u32,
@@ -158,6 +160,7 @@ impl Runtime {
             serde_json::from_value::<Snapshot>(e.value).map_err(|_| "invalid runtime snapshot")?
         } else {
             Snapshot {
+                price_basis: c.candles.price_basis.clone(),
                 calendar_version: 4,
                 hash_version: 2,
                 markets: BTreeMap::new(),
@@ -173,6 +176,11 @@ impl Runtime {
                 usage: Value::Null,
             }
         };
+        if c.candles.price_basis == "index" && s.price_basis != "index" {
+            return Err(
+                "index source requires a new DATABASE_PATH; old state is not migrated".into(),
+            );
+        }
         if s.hash_version > 2 {
             return Err("unsupported runtime hash version".into());
         }

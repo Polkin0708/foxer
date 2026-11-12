@@ -8,6 +8,7 @@ fn offline_run_is_reproducible_and_refuses_overwrite() {
     fs::create_dir_all(root.join("prepared")).unwrap();
     let mut cfg: serde_json::Value =
         serde_json::from_slice(&fs::read("../strategy/fvg-bot-rules.json").unwrap()).unwrap();
+    cfg["candles"]["price_basis"] = json!("bid"); // The synthetic archive contains Bid/Ask.
     for tf in ["W", "D", "H4"] {
         cfg["context"]["minimum_bars"][tf] = json!(1);
     }

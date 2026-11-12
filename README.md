@@ -187,6 +187,7 @@ python3 -m unittest discover -s tests
 ./forex-bot check-service .env
 ./forex-bot smoke-test /tmp/forex-smoke.sqlite strategy/fvg-bot-rules.json
 ./forex-bot probe .env
+./forex-bot probe-upscale .env
 ./forex-bot run .env
 ```
 
@@ -279,3 +280,18 @@ sudo journalctl -u forex-bot -f
 Импорт подготовленных минут: `forex-bot import-history <db> <root> [symbol]`.
 Без symbol используется EURUSD. Поле source отчёта сохраняет реальное
 происхождение данных; пустое название источника отклоняется.
+
+### Котировки Upscale
+
+`run` получает индексные снимки Upscale каждые 2 секунды для всех пар одним
+запросом. Нужны UPSCALE_API_KEY и ровно один активный API-enabled демо-счёт.
+Текущая стратегия использует candles.price_basis=index: одна цена для свечей,
+входов, стопов и целей, без спреда. Ордера не отправляются.
+`probe-upscale .env` проверяет только Upscale без Telegram/OpenAI и записи в БД;
+эту read-only команду можно запускать через Docker локально по явному запросу.
+
+Для первого запуска укажите новый DATABASE_PATH, например data/upscale.sqlite.
+Старый расчётный snapshot не мигрируется. Bid-архивы не загружаются как история
+индекса: новым сигналам нужен накопленный W/D/H4-контекст по минимумам JSON.
+Бэктест Bid/Ask-архивов запускается с отдельной копией стратегии с
+candles.price_basis=bid; текущий index-конфиг явно отклоняется.

@@ -5,7 +5,10 @@ use forex_bot::{
 };
 use serde_json::{json, Value};
 fn rules() -> Value {
-    serde_json::from_str(include_str!("../../strategy/fvg-bot-rules.json")).unwrap()
+    let mut v: Value =
+        serde_json::from_str(include_str!("../../strategy/fvg-bot-rules.json")).unwrap();
+    v["candles"]["price_basis"] = json!("bid"); // These fixtures exercise legacy Bid/Ask behavior.
+    v
 }
 fn path(name: &str) -> std::path::PathBuf {
     std::env::temp_dir().join(format!("multi-{}-{name}.sqlite", std::process::id()))
