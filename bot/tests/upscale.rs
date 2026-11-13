@@ -7,7 +7,109 @@ use std::{
 };
 const ID: &str = "00000000-0000-4000-8000-000000000001";
 fn market(ticker: &str, base: &str) -> Value {
-    json!({"id":ID,"config":{"ticker":ticker,"baseAsset":base,"quoteAsset":"USD"},"state":{"indexPrice":"159889999999","blockTimestamp":1000},"settings":{"isClosed":false,"isPaused":false,"isCloseOnly":false}})
+    json!({"id":ID,"config":{"ticker":ticker,"baseAsset":base,"quoteAsset":"USD"},"state":{"indexPrice":"159889999999","blockTimestamp":1000},"settings":{"isClosed":false,"isPaused":false,"isCloseOnly":false},"schedule":null})
+}
+fn schedule(in_pause: bool) -> Value {
+    json!({"inPause":in_pause,"pausedAt":if in_pause { 1000 } else { 0 },
+        "nextPauseAt":2000,"nextUnpauseAt":3000,
+        "closestPauseAt":2000,"closestUnpauseAt":3000})
+}
+
+#[test]
+fn schedule_is_preserved_including_zero_and_no_next_session() {
+    for next in [0_i64, 2000, 9_007_199_254_740_991] {
+        let mut m = market("EUR/USD", "EUR");
+        m["schedule"] = schedule(false);
+        for field in [
+            "nextPauseAt",
+            "nextUnpauseAt",
+            "closestPauseAt",
+            "closestUnpauseAt",
+        ] {
+            m["schedule"][field] = json!(next);
+        }
+        let q = parse_quotes(&json!([m.clone()]), &["EURUSD".into()], 1000, 1).unwrap();
+        assert_eq!(
+            serde_json::to_value(&q[0]).unwrap()["schedule"],
+            m["schedule"]
+        );
+        assert!(q[0].to_tick().is_ok());
+    }
+    let q = parse_quotes(
+        &json!([market("EUR/USD", "EUR")]),
+        &["EURUSD".into()],
+        1000,
+        1,
+    )
+    .unwrap();
+    assert!(q[0].to_tick().is_ok());
+    assert_eq!(
+        serde_json::to_value(&q[0]).unwrap().get("schedule"),
+        Some(&Value::Null)
+    );
+}
+
+#[test]
+fn schedule_missing_or_malformed_is_not_a_round_the_clock_market() {
+    let mut missing = market("EUR/USD", "EUR");
+    missing.as_object_mut().unwrap().remove("schedule");
+    assert!(parse_quotes(&json!([missing]), &["EURUSD".into()], 1000, 1).is_err());
+    for value in [json!(false), json!([]), json!({}), json!({"inPause":false})] {
+        let mut m = market("EUR/USD", "EUR");
+        m["schedule"] = value;
+        assert!(parse_quotes(&json!([m]), &["EURUSD".into()], 1000, 1).is_err());
+    }
+    for field in [
+        "inPause",
+        "pausedAt",
+        "nextPauseAt",
+        "nextUnpauseAt",
+        "closestPauseAt",
+        "closestUnpauseAt",
+    ] {
+        let mut m = market("EUR/USD", "EUR");
+        m["schedule"] = schedule(false);
+        m["schedule"].as_object_mut().unwrap().remove(field);
+        assert!(
+            parse_quotes(&json!([m]), &["EURUSD".into()], 1000, 1).is_err(),
+            "missing {field}"
+        );
+        for bad in [Value::Null, json!("0"), json!(-1), json!(0.5)] {
+            let mut m = market("EUR/USD", "EUR");
+            m["schedule"] = schedule(false);
+            m["schedule"][field] = bad;
+            assert!(
+                parse_quotes(&json!([m]), &["EURUSD".into()], 1000, 1).is_err(),
+                "invalid {field}"
+            );
+        }
+    }
+}
+
+#[test]
+fn scheduled_pause_blocks_fresh_ticks() {
+    let mut m = market("EUR/USD", "EUR");
+    m["schedule"] = schedule(true);
+    let q = parse_quotes(&json!([m]), &["EURUSD".into()], 1000, 1).unwrap();
+    assert_eq!(q[0].to_tick(), Err(Error::Invalid("market is unavailable")));
+}
+
+#[test]
+fn scheduled_pause_accepts_old_snapshot_only_as_status_then_checks_freshness() {
+    let mut m = market("EUR/USD", "EUR");
+    m["schedule"] = schedule(true);
+    for _ in 0..2 {
+        let q = parse_quotes(&json!([m.clone()]), &["EURUSD".into()], 100000, 1).unwrap();
+        assert!(q[0].to_tick().is_err());
+    }
+    m["schedule"] = schedule(false);
+    assert_eq!(
+        parse_quotes(&json!([m.clone()]), &["EURUSD".into()], 100000, 1),
+        Err(Error::Invalid("stale snapshot"))
+    );
+    m["state"]["blockTimestamp"] = json!(100000);
+    let q = parse_quotes(&json!([m]), &["EURUSD".into()], 100000, 1).unwrap();
+    assert!(q[0].to_tick().is_ok());
 }
 fn symbols() -> Vec<String> {
     vec!["EURUSD".into(), "GBPUSD".into(), "USDJPY".into()]
@@ -127,20 +229,20 @@ fn accounts_use_get_bearer_and_filter_real_inactive_and_disabled() {
 }
 #[test]
 fn one_market_request_returns_all_symbols_for_account() {
-    let (url, h) = server(
-        200,
-        json!([
-            market("EUR/USD", "EUR"),
-            market("GBP/USD", "GBP"),
-            market("USDJPY/USD", "USDJPY")
-        ]),
-        "",
-    );
+    let mut eur = market("EUR/USD", "EUR");
+    eur["schedule"] = schedule(true);
+    let mut gbp = market("GBP/USD", "GBP");
+    gbp["schedule"] = schedule(false);
+    let (url, h) = server(200, json!([eur, gbp, market("USDJPY/USD", "USDJPY")]), "");
     let result = Client::new(&url, "fake-upscale-key")
         .unwrap()
         .quotes(ID, &symbols(), || 1000, 1);
     let req = h.join().unwrap();
-    assert_eq!(result.unwrap().len(), 3);
+    let quotes = result.unwrap();
+    assert_eq!(quotes.len(), 3);
+    assert!(quotes[0].to_tick().is_err());
+    assert!(quotes[1].to_tick().is_ok());
+    assert!(quotes[2].to_tick().is_ok());
     assert!(req.starts_with(&format!("GET /v2/markets?accountId={ID} ")));
 }
 #[test]
@@ -159,6 +261,7 @@ fn http_failures_keep_status_retry_after_without_body_or_key() {
             result.unwrap_err(),
             Error::Http {
                 status,
+                code: None,
                 retry_after_seconds: Some(17)
             }
         );

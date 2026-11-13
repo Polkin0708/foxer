@@ -243,7 +243,7 @@ fn feed_worker(
                     ) {
                         Ok(quotes) => {
                             let q = &quotes[0];
-                            let closed = q.closed || q.paused;
+                            let closed = q.is_unavailable();
                             if tx.send(Event::MarketState(symbol.clone(), closed)).is_err() {
                                 return;
                             }
@@ -276,6 +276,7 @@ fn feed_worker(
                     crate::upscale::Error::Http {
                         status: 429,
                         retry_after_seconds,
+                        ..
                     } => retry_after_seconds.unwrap_or(60).max(2),
                     _ => 5,
                 };
@@ -463,6 +464,73 @@ mod tests {
         io::{Read, Write},
         net::TcpListener,
     };
+    #[test]
+    fn scheduled_pause_worker_emits_only_status_until_fresh_resume() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let account = "00000000-0000-4000-8000-000000000001";
+        let server = thread::spawn(move || {
+            for attempt in 0..4 {
+                let deadline = Instant::now() + Duration::from_secs(10);
+                let mut stream = loop {
+                    if let Ok((stream, _)) = listener.accept() {
+                        break stream;
+                    }
+                    assert!(Instant::now() < deadline, "missing market request");
+                    thread::sleep(Duration::from_millis(5));
+                };
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(3)))
+                    .unwrap();
+                let mut request = vec![];
+                let mut buf = [0; 1024];
+                while !request.windows(4).any(|w| w == b"\r\n\r\n") {
+                    let n = stream.read(&mut buf).unwrap();
+                    assert!(n > 0);
+                    request.extend_from_slice(&buf[..n]);
+                }
+                assert!(String::from_utf8(request)
+                    .unwrap()
+                    .starts_with(&format!("GET /v2/markets?accountId={account} ")));
+                let paused = attempt < 2;
+                let body = json!([{"id":account,
+                    "config":{"ticker":"EUR/USD","baseAsset":"EUR","quoteAsset":"USD"},
+                    "state":{"indexPrice":"1100000000","blockTimestamp":if paused { 1 } else { now() * 1000 }},
+                    "settings":{"isClosed":false,"isPaused":false,"isCloseOnly":false},
+                    "schedule":{"inPause":paused,"pausedAt":if paused { 1 } else { 0 },
+                        "nextPauseAt":0,"nextUnpauseAt":0,"closestPauseAt":0,"closestUnpauseAt":0}
+                }]).to_string();
+                write!(
+                    stream,
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                )
+                .unwrap();
+            }
+        });
+        let client = crate::upscale::Client::new(&base, "fixture-key").unwrap();
+        let (tx, rx) = mpsc::sync_channel(16);
+        let worker = thread::spawn(move || {
+            feed_worker(tx, vec!["EURUSD".into()], client, account.into(), 60)
+        });
+        for _ in 0..2 {
+            assert!(
+                matches!(rx.recv_timeout(Duration::from_secs(10)).unwrap(), Event::MarketState(symbol, true) if symbol == "EURUSD")
+            );
+        }
+        assert!(
+            matches!(rx.recv_timeout(Duration::from_secs(10)).unwrap(), Event::MarketState(symbol, false) if symbol == "EURUSD")
+        );
+        assert!(
+            matches!(rx.recv_timeout(Duration::from_secs(10)).unwrap(), Event::Tick(t) if t.symbol == "EURUSD")
+        );
+        assert!(rx.try_recv().is_err());
+        drop(rx);
+        server.join().unwrap();
+        worker.join().unwrap();
+    }
+
     #[test]
     fn image_job_downloads_preserves_and_sends_actual_bytes_with_structured_response() {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();

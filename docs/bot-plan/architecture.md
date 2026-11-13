@@ -428,7 +428,7 @@ quality-report.json.source и сохраняется в SQLite; существу
 
 ## Адаптер котировок Upscale
 
-bot/src/upscale.rs выполняет только GET /accounts/with-risk-status и
+bot/src/upscale.rs читает котировки через GET /accounts/with-risk-status и
 /v2/markets?accountId=... с Bearer-ключом. API base фиксирован в CLI,
 заменяем в тестах. Settings хранит ключ отдельно от стратегии.
 
@@ -445,11 +445,25 @@ market_id читается из API, проверяется формат UUID. �
 IndexQuote хранит source=upscale, исходный положительный index_price_fp9
 (i64, масштаб 1e9), blockTimestamp UTC ms, идентичность и closed/paused/close_only.
 Будущее время, некорректные поля и устаревшие открытые рынки отклоняются.
-Давность ограничивает QUOTE_STALE_SECONDS; для closed/paused старый снимок
-допускается только как статус, а не тик. Close-only не мешает сигналам.
+Давность ограничивает QUOTE_STALE_SECONDS; для closed/paused или планового
+перерыва старый снимок допускается только как статус, а не тик.
+Close-only не мешает сигналам.
+
+IndexQuote также хранит `schedule` из этого же ответа: `inPause`, `pausedAt`,
+`nextPauseAt`, `nextUnpauseAt` и совместимые поля `closestPauseAt`,
+`closestUnpauseAt`. `null` означает круглосуточный рынок; отсутствующее поле
+или некорректный объект отклоняется. Время — целые неотрицательные Unix ms,
+значения `0` и `9007199254740991` сохраняются без преобразования в дату.
+При `inPause=true` worker передаёт только MarketState, без Tick и без
+ошибки потока из-за давности цены. Плановый перерыв учитывается вместе с
+прежними closed/paused при допуске котировки; его начало и конец не создают
+уведомлений в чат. После `inPause=false` действуют прежние проверки свежести.
+Опрос всех рынков продолжается одним GET; локальные таймеры по границам
+расписания не заменяют следующий ответ API.
 
 HTTP: timeout 30s, connect timeout 10s, redirect запрещены, ответ ≤2 MiB.
-Ошибки содержат HTTP-код и числовой Retry-After, без ключа/тела ответа.
+Ошибки содержат HTTP-код, машинный код Upscale (если получен) и числовой
+Retry-After, без ключа, текста message и полного тела ответа.
 Worker run запрашивает все рынки один раз и разбирает пары независимо.
 Период — 2s после ответа; 429 — Retry-After, минимум 2s, по умолчанию 60s;
 другие ошибки — 5s. Повторы/обратное время обрабатывает существующий Runtime.
@@ -459,11 +473,34 @@ Aggregator; протокольные парсеры прежнего поста�
 
 probe-upscale <env-file> читает снимки всех активных демо-счетов без записи
 в БД и без Telegram/OpenAI. probe также проверяет Telegram getMe/getChat.
-Демон для проверки API не запускается. Исполнение ордеров не реализовано.
+Демон для проверки API не запускается. Торговые методы адаптера не вызываются
+из run, probe или probe-upscale.
 Предыдущий scripts/upscale_markets.py остаётся диагностическим прототипом.
 
 Контракт: [счета](https://docs.upscale.trade/ru/developers/operations/getaccountswithriskstatus),
 [рынки](https://docs.upscale.trade/ru/developers/operations/getmarkets).
+
+Торговые методы того же Client:
+
+- `open_market` принимает счёт, рынок, long/short, резерв amount и leverage;
+  отправляет POST /orders с type=market.
+- `active_positions` выполняет GET /positions/{accountId}/active и возвращает
+  idx, market, direction и size каждой позиции.
+- `close_market` принимает счёт, рынок, positionId, направление позиции и
+  объём amount; отправляет POST /orders с type=take и triggerPrice="0".
+  Полный size закрывает всю позицию, меньший amount — её часть.
+
+Оба POST принимают x-idempotency-key от вызывающего кода и возвращают id,
+status и errorCode ордера. Все шесть статусов ордера из API сохраняют свой
+смысл; canceled_by_error возвращается с причиной, а не как подтверждение
+исполнения. Запросы проверяют UUID и положительную целочисленную запись fp9;
+числа передаются строками без округления или ограничения диапазоном float.
+Используются прежние HTTP-клиент, Bearer, таймауты, запрет redirect и лимит
+ответа. Нет автоматического повтора POST, расчёта суммы/плеча или скрытых
+дополнительных запросов. Методы не меняют SQLite и не отправляют уведомления.
+
+Контракт торговли: [создание ордера](https://docs.upscale.trade/ru/developers/operations/createorder),
+[открытые позиции](https://docs.upscale.trade/ru/developers/operations/getactivepositions).
 
 ## Единая индексная цена
 

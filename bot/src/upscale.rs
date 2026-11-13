@@ -1,5 +1,5 @@
-//! Read-only Upscale index-price snapshots.
-use serde::Serialize;
+//! Upscale index snapshots and explicit market open/close operations.
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 pub const BASE_URL: &str = "https://api.upscale.trade";
@@ -9,6 +9,7 @@ pub enum Error {
     Http {
         status: u16,
         retry_after_seconds: Option<u64>,
+        code: Option<String>,
     },
     Transport,
 }
@@ -17,6 +18,17 @@ impl std::fmt::Display for Error {
         write!(f, "Upscale: {self:?}")
     }
 }
+#[derive(Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct MarketSchedule {
+    pub in_pause: bool,
+    pub paused_at: u64,
+    pub next_pause_at: u64,
+    pub next_unpause_at: u64,
+    pub closest_pause_at: u64,
+    pub closest_unpause_at: u64,
+}
+
 #[derive(Debug, Serialize, PartialEq, Eq)]
 pub struct IndexQuote {
     pub symbol: String,
@@ -30,6 +42,7 @@ pub struct IndexQuote {
     pub closed: bool,
     pub paused: bool,
     pub close_only: bool,
+    pub schedule: Option<MarketSchedule>,
 }
 
 fn uuid(value: &str) -> bool {
@@ -41,6 +54,20 @@ fn uuid(value: &str) -> bool {
                 c.is_ascii_hexdigit()
             }
         })
+}
+
+fn positive_fp9(value: &str) -> bool {
+    value.starts_with(|c: char| matches!(c, '1'..='9')) && value.bytes().all(|b| b.is_ascii_digit())
+}
+
+fn trading_ids(account: &str, market: &str) -> Result<(), Error> {
+    if !uuid(account) {
+        return Err(Error::Invalid("invalid account ID"));
+    }
+    if !uuid(market) {
+        return Err(Error::Invalid("invalid market ID"));
+    }
+    Ok(())
 }
 fn identity(symbol: &str) -> Result<(&'static str, &'static str), Error> {
     match symbol {
@@ -111,10 +138,14 @@ pub fn parse_quotes(
             let closed = flag("isClosed")?;
             let paused = flag("isPaused")?;
             let close_only = flag("isCloseOnly")?;
-            if !closed && !paused && now_ms - millis > stale_ms {
-                return Err(Error::Invalid("stale snapshot"));
-            }
-            Ok(IndexQuote {
+            let schedule = serde_json::from_value(
+                market
+                    .get("schedule")
+                    .ok_or(Error::Invalid("missing market schedule"))?
+                    .clone(),
+            )
+            .map_err(|_| Error::Invalid("invalid market schedule"))?;
+            let quote = IndexQuote {
                 symbol: symbol.clone(),
                 market_id: id.into(),
                 ticker: ticker.into(),
@@ -126,7 +157,12 @@ pub fn parse_quotes(
                 closed,
                 paused,
                 close_only,
-            })
+                schedule,
+            };
+            if !quote.is_unavailable() && now_ms - millis > stale_ms {
+                return Err(Error::Invalid("stale snapshot"));
+            }
+            Ok(quote)
         })
         .collect()
 }
@@ -136,7 +172,142 @@ pub struct Client {
     base: String,
     key: String,
 }
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum Direction {
+    Long,
+    Short,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OpenMarketOrder<'a> {
+    pub account_id: &'a str,
+    pub market_id: &'a str,
+    pub direction: Direction,
+    /// Quote reserve, raw fp9.
+    pub amount: &'a str,
+    /// Leverage multiplier, raw fp9.
+    pub leverage: &'a str,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CloseMarketOrder<'a> {
+    pub account_id: &'a str,
+    pub market_id: &'a str,
+    pub position_id: &'a str,
+    pub direction: Direction,
+    /// Base asset size to close, raw fp9.
+    pub amount: &'a str,
+}
+
+#[derive(Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum OrderStatus {
+    Active,
+    Executed,
+    Canceled,
+    CanceledByUpdate,
+    CanceledByPosition,
+    CanceledByError,
+}
+
+#[derive(Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct Order {
+    pub id: String,
+    pub status: OrderStatus,
+    pub error_code: Option<String>,
+}
+
+#[derive(Debug, Deserialize, PartialEq, Eq)]
+pub struct Position {
+    #[serde(rename = "idx")]
+    pub id: String,
+    #[serde(rename = "market")]
+    pub market_id: String,
+    pub direction: Direction,
+    /// Current base asset size, raw fp9.
+    pub size: String,
+}
+
 impl Client {
+    /// Opens/increases a position. No retries or position lookup are performed.
+    pub fn open_market(
+        &self,
+        order: &OpenMarketOrder<'_>,
+        idempotency_key: &str,
+    ) -> Result<Order, Error> {
+        trading_ids(order.account_id, order.market_id)?;
+        if !positive_fp9(order.amount) {
+            return Err(Error::Invalid("invalid fp9 amount"));
+        }
+        if !positive_fp9(order.leverage) {
+            return Err(Error::Invalid("invalid fp9 leverage"));
+        }
+        let mut body = serde_json::to_value(order).map_err(|_| Error::Invalid("invalid order"))?;
+        body["type"] = Value::from("market");
+        self.create_order(&body, idempotency_key)
+    }
+
+    pub fn active_positions(&self, account: &str) -> Result<Vec<Position>, Error> {
+        if !uuid(account) {
+            return Err(Error::Invalid("invalid account ID"));
+        }
+        let value = self.get(&format!("/positions/{account}/active"), None)?;
+        let positions: Vec<Position> = serde_json::from_value(value)
+            .map_err(|_| Error::Invalid("invalid positions response"))?;
+        for position in &positions {
+            if !uuid(&position.id) || !uuid(&position.market_id) || !positive_fp9(&position.size) {
+                return Err(Error::Invalid("invalid positions response"));
+            }
+        }
+        Ok(positions)
+    }
+
+    /// Closes base asset units using the position's direction, without reversing it.
+    pub fn close_market(
+        &self,
+        order: &CloseMarketOrder<'_>,
+        idempotency_key: &str,
+    ) -> Result<Order, Error> {
+        trading_ids(order.account_id, order.market_id)?;
+        if !uuid(order.position_id) {
+            return Err(Error::Invalid("invalid position ID"));
+        }
+        if !positive_fp9(order.amount) {
+            return Err(Error::Invalid("invalid fp9 amount"));
+        }
+        let mut body = serde_json::to_value(order).map_err(|_| Error::Invalid("invalid order"))?;
+        body["type"] = Value::from("take");
+        body["triggerPrice"] = Value::from("0");
+        self.create_order(&body, idempotency_key)
+    }
+
+    fn create_order(&self, body: &Value, idempotency_key: &str) -> Result<Order, Error> {
+        if idempotency_key.trim().is_empty()
+            || idempotency_key.bytes().any(|b| b.is_ascii_control())
+        {
+            return Err(Error::Invalid("invalid idempotency key"));
+        }
+        let header = reqwest::header::HeaderValue::from_str(idempotency_key)
+            .map_err(|_| Error::Invalid("invalid idempotency key"))?;
+        let value = self.send(
+            self.http
+                .post(format!("{}/orders", self.base))
+                .header("x-idempotency-key", header)
+                .json(body),
+        )?;
+        let order: Order =
+            serde_json::from_value(value).map_err(|_| Error::Invalid("invalid order response"))?;
+        if !uuid(&order.id) {
+            return Err(Error::Invalid("invalid order response"));
+        }
+        Ok(order)
+    }
+
     pub fn new(base: &str, key: &str) -> Result<Self, Error> {
         let url = url::Url::parse(base).map_err(|_| Error::Invalid("invalid API base"))?;
         let loopback = matches!(url.host_str(), Some("127.0.0.1" | "localhost" | "[::1]"));
@@ -165,26 +336,51 @@ impl Client {
         })
     }
     fn get(&self, path: &str, account: Option<&str>) -> Result<Value, Error> {
-        use std::io::Read;
-        let mut request = self
-            .http
-            .get(format!("{}{path}", self.base))
-            .bearer_auth(&self.key)
-            .header("Accept", "application/json");
+        let mut request = self.http.get(format!("{}{path}", self.base));
         if let Some(id) = account {
             request = request.query(&[("accountId", id)]);
         }
-        let response = request.send().map_err(|_| Error::Transport)?;
-        if !response.status().is_success() {
+        self.send(request)
+    }
+
+    fn send(&self, request: reqwest::blocking::RequestBuilder) -> Result<Value, Error> {
+        let response = request
+            .bearer_auth(&self.key)
+            .header("Accept", "application/json")
+            .send()
+            .map_err(|_| Error::Transport)?;
+        let status = response.status();
+        let retry_after_seconds = response
+            .headers()
+            .get("Retry-After")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|s| s.parse().ok());
+        let value = Self::read_json(response);
+        if !status.is_success() {
+            let code = value
+                .as_ref()
+                .ok()
+                .and_then(|v| v["error"].as_str())
+                .filter(|s| {
+                    !s.is_empty()
+                        && s.len() <= 128
+                        && s.bytes()
+                            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_')
+                        && !s.starts_with("usk_")
+                        && !s.contains(&self.key)
+                })
+                .map(str::to_owned);
             return Err(Error::Http {
-                status: response.status().as_u16(),
-                retry_after_seconds: response
-                    .headers()
-                    .get("Retry-After")
-                    .and_then(|v| v.to_str().ok())
-                    .and_then(|s| s.parse().ok()),
+                status: status.as_u16(),
+                code,
+                retry_after_seconds,
             });
         }
+        value
+    }
+
+    fn read_json(response: reqwest::blocking::Response) -> Result<Value, Error> {
+        use std::io::Read;
         const LIMIT: u64 = 2 * 1024 * 1024;
         if response.content_length().is_some_and(|n| n > LIMIT) {
             return Err(Error::Invalid("response too large"));
@@ -280,8 +476,12 @@ pub fn probe(path: &std::path::Path) -> Result<String, String> {
 }
 
 impl IndexQuote {
+    pub fn is_unavailable(&self) -> bool {
+        self.closed || self.paused || self.schedule.as_ref().is_some_and(|s| s.in_pause)
+    }
+
     pub fn to_tick(&self) -> Result<crate::feed::Tick, Error> {
-        if self.closed || self.paused || self.index_price_fp9 <= 0 {
+        if self.is_unavailable() || self.index_price_fp9 <= 0 {
             return Err(Error::Invalid("market is unavailable"));
         }
         let price = self.index_price_fp9 / 1000 + i64::from(self.index_price_fp9 % 1000 >= 500);
