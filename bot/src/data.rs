@@ -11,7 +11,7 @@ fn db_error(_: rusqlite::Error) -> String {
     "database operation failed".into()
 }
 pub fn open(path: &Path) -> Result<Connection> {
-    let mut db = Connection::open(path).map_err(db_error)?;
+    let db = Connection::open(path).map_err(db_error)?;
     db.busy_timeout(std::time::Duration::from_secs(5))
         .map_err(db_error)?;
     let version: i64 = db
@@ -20,9 +20,7 @@ pub fn open(path: &Path) -> Result<Connection> {
     let app: i64 = db
         .query_row("PRAGMA application_id", [], |r| r.get(0))
         .map_err(db_error)?;
-    if app == APP_ID && matches!(version, 1..=3) {
-        migrate_state(&mut db)?;
-        upgrade_instruments(&mut db)?;
+    if app == APP_ID && version == 4 {
         return Ok(db);
     }
     let tables: i64 = db
@@ -35,82 +33,14 @@ pub fn open(path: &Path) -> Result<Connection> {
     if version != 0 || app != 0 || tables != 0 {
         return Err("unsupported or foreign database schema".into());
     }
-    let tx = db.transaction().map_err(db_error)?;
-    tx.execute_batch("CREATE TABLE minutes(source TEXT NOT NULL, timestamp INTEGER NOT NULL, payload TEXT NOT NULL, PRIMARY KEY(source,timestamp));
- CREATE TABLE imports(digest TEXT PRIMARY KEY, report TEXT NOT NULL);
- PRAGMA application_id=1180190513; PRAGMA user_version=1;").map_err(db_error)?;
-    tx.commit().map_err(db_error)?;
-    migrate_state(&mut db)?;
-    upgrade_instruments(&mut db)?;
+    db.execute_batch("BEGIN;
+    CREATE TABLE entities(seq INTEGER PRIMARY KEY AUTOINCREMENT,kind TEXT NOT NULL,key TEXT NOT NULL,payload TEXT NOT NULL,UNIQUE(kind,key));
+    CREATE TABLE imports(symbol TEXT NOT NULL,digest TEXT NOT NULL,report TEXT NOT NULL,PRIMARY KEY(symbol,digest));
+    CREATE TABLE inbox(id TEXT PRIMARY KEY,payload TEXT NOT NULL);
+    CREATE TABLE minutes(symbol TEXT NOT NULL,source TEXT NOT NULL,timestamp INTEGER NOT NULL,payload TEXT NOT NULL,PRIMARY KEY(symbol,source,timestamp));
+    CREATE TABLE outbox(seq INTEGER PRIMARY KEY AUTOINCREMENT,id TEXT NOT NULL UNIQUE,payload TEXT NOT NULL,delivered INTEGER NOT NULL DEFAULT 0 CHECK(delivered IN (0,1)));
+    PRAGMA application_id=1180190513; PRAGMA user_version=4; COMMIT;").map_err(db_error)?;
     Ok(db)
-}
-fn migrate_state(db: &mut Connection) -> Result<()> {
-    let version: i64 = db
-        .query_row("PRAGMA user_version", [], |r| r.get(0))
-        .map_err(db_error)?;
-    if version >= 2 {
-        return Ok(());
-    }
-    let tx = db.transaction().map_err(db_error)?;
-    tx.execute_batch("CREATE TABLE inbox(id TEXT PRIMARY KEY,payload TEXT NOT NULL);
-      CREATE TABLE entities(seq INTEGER PRIMARY KEY AUTOINCREMENT,kind TEXT NOT NULL,key TEXT NOT NULL,payload TEXT NOT NULL,UNIQUE(kind,key));
-      CREATE TABLE outbox(seq INTEGER PRIMARY KEY AUTOINCREMENT,id TEXT NOT NULL UNIQUE,payload TEXT NOT NULL,delivered INTEGER NOT NULL DEFAULT 0 CHECK(delivered IN (0,1)));
-      PRAGMA user_version=2;").map_err(db_error)?;
-    tx.commit().map_err(db_error)
-}
-fn upgrade_instruments(db: &mut Connection) -> Result<()> {
-    let version: i64 = db
-        .query_row("PRAGMA user_version", [], |r| r.get(0))
-        .map_err(db_error)?;
-    if version >= 3 {
-        return Ok(());
-    }
-    let tx = db.transaction().map_err(db_error)?;
-    tx.execute_batch("ALTER TABLE minutes RENAME TO minutes_old;
-        CREATE TABLE minutes(symbol TEXT NOT NULL,source TEXT NOT NULL,timestamp INTEGER NOT NULL,payload TEXT NOT NULL,PRIMARY KEY(symbol,source,timestamp));
-        INSERT INTO minutes SELECT 'EURUSD',source,timestamp,payload FROM minutes_old;
-        DROP TABLE minutes_old;
-        ALTER TABLE imports RENAME TO imports_old;
-        CREATE TABLE imports(symbol TEXT NOT NULL,digest TEXT NOT NULL,report TEXT NOT NULL,PRIMARY KEY(symbol,digest));
-        INSERT INTO imports SELECT 'EURUSD',digest,report FROM imports_old;
-        DROP TABLE imports_old;").map_err(db_error)?;
-    let snapshot: Option<String> = tx
-        .query_row(
-            "SELECT payload FROM entities WHERE kind='runtime' AND key='coordinator'",
-            [],
-            |r| r.get(0),
-        )
-        .optional()
-        .map_err(db_error)?;
-    if let Some(raw) = snapshot {
-        let mut v: Value = serde_json::from_str(&raw).map_err(|_| "invalid runtime snapshot")?;
-        let obj = v.as_object_mut().ok_or("invalid runtime snapshot")?;
-        obj.remove("rules");
-        let mut agg = obj
-            .remove("aggregator")
-            .unwrap_or(json!({"last":null,"open":{}}));
-        if let Some(last) = agg.get_mut("last").and_then(Value::as_object_mut) {
-            last.insert("symbol".into(), json!("EURUSD"));
-        }
-        let engine = obj.remove("engine").ok_or("missing legacy engine")?;
-        let down = obj.remove("feed_down").unwrap_or(json!(false));
-        obj.insert(
-            "markets".into(),
-            json!({"EURUSD":{"engine":engine,"aggregator":agg,"feed_down":down}}),
-        );
-        obj.insert("rules_hash".into(), json!(""));
-        tx.execute(
-            "UPDATE entities SET payload=?1 WHERE kind='runtime' AND key='coordinator'",
-            [v.to_string()],
-        )
-        .map_err(db_error)?;
-    }
-    tx.execute("DELETE FROM entities WHERE kind='rules'", [])
-        .map_err(db_error)?;
-    tx.execute("UPDATE inbox SET payload=json_remove(payload,'$.analysis.changes') WHERE json_valid(payload) AND json_type(payload,'$.analysis')='object'",[]).map_err(db_error)?;
-    tx.execute_batch("PRAGMA user_version=3;")
-        .map_err(db_error)?;
-    tx.commit().map_err(db_error)
 }
 pub use forex_core::prices::{iso, parse_record, price, utc, Minute};
 pub fn import_history(path: &Path, root: &Path) -> Result<Value> {
@@ -136,10 +66,9 @@ pub fn import_history_symbol(path: &Path, root: &Path, symbol: &str) -> Result<V
         .as_str()
         .filter(|s| !s.trim().is_empty())
         .ok_or("missing data source")?;
-    let conversion = report["timezone_conversion"].as_str().unwrap_or("");
-    if !(conversion == "fixed EST UTC-05:00 to UTC; no DST"
-        || conversion == crate::mt5::TIMEZONE_CONVERSION)
-        || !report["timestamp_reversals"].is_array()
+    if report["timezone"] != "UTC"
+        || report["price_basis"] != "index"
+        || !report["gaps"].is_array()
         || !report["missing_months"].is_array()
     {
         return Err("unsupported source or missing quality information".into());
@@ -153,7 +82,7 @@ pub fn import_history_symbol(path: &Path, root: &Path, symbol: &str) -> Result<V
             || name.contains('\\')
             || name.contains("..")
             || !(name == "gaps.csv"
-                || (name.starts_with(&format!("{symbol}-M1-bid-ask-")) && name.ends_with(".csv")))
+                || (name.starts_with(&format!("{symbol}-M1-index-")) && name.ends_with(".csv")))
         {
             return Err("invalid prepared filename".into());
         }
@@ -286,9 +215,9 @@ pub fn inspect_symbol(
             }
             let key = (source.clone(), start);
             if let Some(bar) = aggregates[i].get_mut(&key) {
-                bar.high = bar.high.max(minute.bid[1]);
-                bar.low = bar.low.min(minute.bid[2]);
-                bar.close = minute.bid[3];
+                bar.high = bar.high.max(minute.price[1]);
+                bar.low = bar.low.min(minute.price[2]);
+                bar.close = minute.price[3];
                 bar.observed_minutes += 1;
             } else {
                 aggregates[i].insert(
@@ -297,10 +226,10 @@ pub fn inspect_symbol(
                         source: source.clone(),
                         start_utc: iso(start)?,
                         end_utc: iso(end)?,
-                        open: minute.bid[0],
-                        high: minute.bid[1],
-                        low: minute.bid[2],
-                        close: minute.bid[3],
+                        open: minute.price[0],
+                        high: minute.price[1],
+                        low: minute.price[2],
+                        close: minute.price[3],
                         observed_minutes: 1,
                     },
                 );
@@ -337,6 +266,6 @@ pub fn inspect_symbol(
         })
         .collect::<Result<Vec<_>>>()?;
     Ok(
-        json!({"symbol":symbol,"schema_version":3,"price_scale":1000000,"timezone":"UTC","m1_count":count,"bars":bars,"imports":imports}),
+        json!({"symbol":symbol,"schema_version":4,"price_scale":1000000,"timezone":"UTC","m1_count":count,"bars":bars,"imports":imports}),
     )
 }

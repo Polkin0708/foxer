@@ -1,5 +1,6 @@
-//! MetaTrader 5 M1 bar export -> prepared bid/ask minutes for import-history.
-//! Server time is America/New_York + 7h; ask is bid plus a fixed spread.
+//! MetaTrader 5 M1 bar export -> prepared index minutes for import-history
+//! and the minute backtest. Server time is America/New_York + 7h; the index
+//! price is the exported (bid) OHLC.
 use chrono::{Datelike, Duration, NaiveDateTime, TimeZone, Weekday};
 use chrono_tz::America::New_York;
 use forex_core::prices::{iso, price};
@@ -9,6 +10,7 @@ use std::{collections::BTreeMap, fs, path::Path};
 
 type Result<T> = std::result::Result<T, String>;
 
+pub const ORIGIN: &str = "mt5_m1_bars";
 pub const TIMEZONE_CONVERSION: &str = "MT5 server time = America/New_York +7h to UTC";
 const HEADER: [&str; 9] = [
     "<DATE>",
@@ -21,7 +23,8 @@ const HEADER: [&str; 9] = [
     "<VOL>",
     "<SPREAD>",
 ];
-const CSV_HEADER: &str = "timestamp_utc,timestamp_ms,bar_end_utc,bid_open,bid_high,bid_low,bid_close,ask_open,ask_high,ask_low,ask_close,quote_count,gap_before_minutes\n";
+const CSV_HEADER: &str =
+    "timestamp_utc,timestamp_ms,bar_end_utc,open,high,low,close,quote_count,gap_before_minutes\n";
 
 fn fmt_price(p: i64) -> String {
     format!("{}.{:06}", p / 1_000_000, p % 1_000_000)
@@ -52,21 +55,12 @@ fn month_of(ts: i64) -> Result<String> {
     Ok(iso(ts)?[..7].to_owned())
 }
 
-pub fn prepare_mt5(
-    export: &Path,
-    root: &Path,
-    symbol: &str,
-    ask_spread: i64,
-    source: &str,
-) -> Result<Value> {
+pub fn prepare_mt5(export: &Path, root: &Path, symbol: &str, source: &str) -> Result<Value> {
     if !crate::valid_symbol(symbol) {
         return Err("invalid instrument".into());
     }
     if source.trim().is_empty() {
         return Err("missing data source".into());
-    }
-    if ask_spread < 0 {
-        return Err("negative ask spread".into());
     }
     if root.exists()
         && fs::read_dir(root)
@@ -87,7 +81,7 @@ pub fn prepare_mt5(
 
     let mut months: BTreeMap<String, String> = BTreeMap::new();
     let mut gaps = String::from("gap_start_utc,gap_end_utc,missing_minutes\n");
-    let mut gap_count = 0u64;
+    let mut gap_list = Vec::new();
     let mut prev: Option<(NaiveDateTime, i64)> = None;
     let mut first = None;
     let mut rows = 0u64;
@@ -122,17 +116,16 @@ pub fn prepare_mt5(
                 let missing = ((ts - pts) / 60 - 1) as u64;
                 if ts - pts > 3600 && !is_weekend_gap(pserver, server) {
                     gaps.push_str(&format!("{},{},{missing}\n", iso(pts + 60)?, iso(ts)?));
-                    gap_count += 1;
+                    gap_list.push(json!({"from_ms": (pts + 60) * 1000, "to_ms": ts * 1000}));
                 }
                 missing
             }
         };
-        let ask = bid.map(|p| p + ask_spread);
         let out = months
             .entry(month_of(ts)?)
             .or_insert_with(|| CSV_HEADER.to_owned());
         out.push_str(&format!(
-            "{},{},{},{},{},{},{},{},{},{},{},{ticks},{gap_before}\n",
+            "{},{},{},{},{},{},{},{ticks},{gap_before}\n",
             iso(ts)?,
             ts * 1000,
             iso(ts + 60)?,
@@ -140,10 +133,6 @@ pub fn prepare_mt5(
             fmt_price(bid[1]),
             fmt_price(bid[2]),
             fmt_price(bid[3]),
-            fmt_price(ask[0]),
-            fmt_price(ask[1]),
-            fmt_price(ask[2]),
-            fmt_price(ask[3]),
         ));
         first.get_or_insert(ts);
         prev = Some((server, ts));
@@ -183,16 +172,19 @@ pub fn prepare_mt5(
         Ok(())
     };
     for (month, body) in &months {
-        write(format!("{symbol}-M1-bid-ask-{month}.csv"), body)?;
+        write(format!("{symbol}-M1-index-{month}.csv"), body)?;
     }
     write("gaps.csv".into(), &gaps)?;
     let report = json!({
         "symbol": symbol,
         "source": source,
+        "price_basis": "index",
+        "timezone": "UTC",
+        "origin": ORIGIN,
         "timezone_conversion": TIMEZONE_CONVERSION,
-        "timestamp_reversals": [],
+        "index_model": "exported bid OHLC used as the index price",
+        "gaps": gap_list,
         "missing_months": missing_months,
-        "ask_model": {"kind": "fixed_spread_over_bid", "spread_millionths": ask_spread},
         "input": {
             "file": export.file_name().and_then(|n| n.to_str()).unwrap_or(""),
             "sha256": format!("{:x}", Sha256::digest(&bytes)),
@@ -200,7 +192,7 @@ pub fn prepare_mt5(
         },
         "first_minute_utc": iso(first)?,
         "last_minute_utc": iso(last)?,
-        "weekday_gaps_over_60_minutes": gap_count,
+        "weekday_gaps_over_60_minutes": gap_list.len(),
         "outputs": outputs,
     });
     fs::write(
@@ -209,7 +201,7 @@ pub fn prepare_mt5(
     )
     .map_err(|_| "cannot write quality report")?;
     Ok(
-        json!({"rows": rows, "months": months.len(), "weekday_gaps_over_60_minutes": gap_count,
+        json!({"rows": rows, "months": months.len(), "weekday_gaps_over_60_minutes": gap_list.len(),
         "missing_months": report["missing_months"], "first_minute_utc": report["first_minute_utc"],
         "last_minute_utc": report["last_minute_utc"]}),
     )

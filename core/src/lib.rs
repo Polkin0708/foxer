@@ -94,11 +94,13 @@ pub fn validate(c: &Strategy) -> Result<(), String> {
     {
         return Err("unsupported: plan_days_statuses".into());
     }
+    if c.candles.price_basis != "index" {
+        return Err("unsupported: /candles/price_basis".into());
+    }
     for (path, expected) in [
         ("/instrument_price_tick_scale", json!(1_000_000)),
         ("/candles/timezone", json!("America/New_York")),
         ("/candles/only_closed_bars", json!(true)),
-        ("/candles/price_basis", json!("bid")),
         ("/candles/h4_close_hours", json!([1, 5, 9, 13, 17, 21])),
         ("/candles/daily_boundary", json!("17:00")),
         ("/candles/weekly_boundary/time", json!("17:00")),

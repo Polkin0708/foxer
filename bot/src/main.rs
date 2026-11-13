@@ -25,49 +25,25 @@ fn main() -> ExitCode {
             }
         };
     }
-    if args.len() == 3 && args[0] == "prepare-state" {
-        return match forex_bot::service::prepare_state(Path::new(&args[1]), Path::new(&args[2])) {
-            Ok(v) => {
-                println!("{v}");
+    if args.len() == 2 && args[0] == "probe-upscale" {
+        return match forex_bot::upscale::probe(Path::new(&args[1])) {
+            Ok(message) => {
+                println!("{message}");
                 ExitCode::SUCCESS
             }
-            Err(e) => {
-                eprintln!("{e}");
+            Err(error) => {
+                eprintln!("{error}");
                 ExitCode::from(1)
             }
         };
     }
-    if args.len() == 2 && args[0] == "upgrade-db" {
-        if !Path::new(&args[1]).is_file() {
-            eprintln!("existing database required");
-            return ExitCode::from(1);
-        }
-        return match forex_bot::data::open(Path::new(&args[1])) {
-            Ok(_) => {
-                println!("Existing database schema updated.");
-                ExitCode::SUCCESS
-            }
-            Err(e) => {
-                eprintln!("{e}");
-                ExitCode::from(1)
-            }
-        };
-    }
-    if args.len() == 6 && args[0] == "prepare-mt5" {
-        let result = args[4]
-            .to_str()
-            .and_then(|s| s.parse::<i64>().ok())
-            .ok_or_else(|| "invalid ask spread".to_owned())
-            .and_then(|spread| {
-                forex_bot::mt5::prepare_mt5(
-                    Path::new(&args[1]),
-                    Path::new(&args[2]),
-                    args[3].to_str().unwrap_or(""),
-                    spread,
-                    args[5].to_str().unwrap_or(""),
-                )
-            });
-        return match result {
+    if args.len() == 5 && args[0] == "prepare-mt5" {
+        return match forex_bot::mt5::prepare_mt5(
+            Path::new(&args[1]),
+            Path::new(&args[2]),
+            args[3].to_str().unwrap_or(""),
+            args[4].to_str().unwrap_or(""),
+        ) {
             Ok(v) => {
                 println!("{v}");
                 ExitCode::SUCCESS

@@ -511,6 +511,9 @@ impl Runtime {
         self.tick_logged(t, allow_new).map(|_| ())
     }
     pub fn tick_logged(&mut self, t: Tick, allow_new: bool) -> Result<Vec<String>, String> {
+        if t.source != "upscale:index" {
+            return Err("live runtime requires Upscale index ticks".into());
+        }
         let event = value(&t)?;
         let id = format!("tick:{:x}", Sha256::digest(event.to_string().as_bytes()));
         let mut s = self.s.clone();

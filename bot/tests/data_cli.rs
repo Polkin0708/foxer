@@ -27,12 +27,14 @@ impl Fixture {
         Self { root }
     }
     fn prepare(&self, rows: &[(&str, i64, &str, &str)]) {
-        let mut csv="timestamp_utc,timestamp_ms,bar_end_utc,bid_open,bid_high,bid_low,bid_close,ask_open,ask_high,ask_low,ask_close,quote_count,gap_before_minutes\n".to_owned();
+        let mut csv="timestamp_utc,timestamp_ms,bar_end_utc,open,high,low,close,quote_count,gap_before_minutes\n".to_owned();
         for (time, ms, end, price) in rows {
-            csv.push_str(&format!("{time},{ms},{end},{price},{price},{price},{price},1.200000,1.200000,1.200000,1.200000,1,0\n"));
+            csv.push_str(&format!(
+                "{time},{ms},{end},{price},{price},{price},{price},1,0\n"
+            ));
         }
-        fs::write(self.root.join("prepared/EURUSD-M1-bid-ask-2026.csv"), &csv).unwrap();
-        let report = json!({"source":"Synthetic test feed","timezone_conversion":"fixed EST UTC-05:00 to UTC; no DST","timestamp_reversals":[],"missing_months":[],"outputs":{"EURUSD-M1-bid-ask-2026.csv":{"bytes":csv.len(),"sha256":format!("{:x}",Sha256::digest(csv.as_bytes()))}}});
+        fs::write(self.root.join("prepared/EURUSD-M1-index-2026.csv"), &csv).unwrap();
+        let report = json!({"source":"Synthetic test feed","timezone":"UTC","price_basis":"index","gaps":[],"missing_months":[],"outputs":{"EURUSD-M1-index-2026.csv":{"bytes":csv.len(),"sha256":format!("{:x}",Sha256::digest(csv.as_bytes()))}}});
         fs::write(self.root.join("quality-report.json"), report.to_string()).unwrap();
     }
     fn run(&self, args: &[&str]) -> Output {
@@ -148,11 +150,7 @@ fn checksum_failure_does_not_change_existing_database() {
     let f = Fixture::new();
     f.prepare(&rows());
     assert!(f.import().status.success());
-    fs::write(
-        f.root.join("prepared/EURUSD-M1-bid-ask-2026.csv"),
-        "corrupt",
-    )
-    .unwrap();
+    fs::write(f.root.join("prepared/EURUSD-M1-index-2026.csv"), "corrupt").unwrap();
     assert_eq!(f.import().status.code(), Some(1));
     assert_eq!(f.inspect("2026-01-12T22:00:00Z")["m1_count"], 3);
 }
@@ -177,7 +175,7 @@ fn invalid_time_order_and_price_are_not_repaired() {
             0 => bad[1].1 += 1,
             1 => bad.reverse(),
             2 => bad[1].3 = "1.1000001",
-            _ => bad[1].3 = "1.300000",
+            _ => bad[1].3 = "0",
         };
         f.prepare(&bad);
         assert_eq!(f.import().status.code(), Some(1));
@@ -204,13 +202,13 @@ fn imports_same_timestamp_for_different_pairs_without_mixing_history() {
     f.prepare(&rows());
     assert!(f.import().status.success());
     let prepared = f.root.join("prepared");
-    let original = fs::read(prepared.join("EURUSD-M1-bid-ask-2026.csv")).unwrap();
+    let original = fs::read(prepared.join("EURUSD-M1-index-2026.csv")).unwrap();
     let mut report: Value =
         serde_json::from_slice(&fs::read(f.root.join("quality-report.json")).unwrap()).unwrap();
-    let metadata = report["outputs"]["EURUSD-M1-bid-ask-2026.csv"].clone();
-    fs::write(prepared.join("GBPUSD-M1-bid-ask-2026.csv"), original).unwrap();
+    let metadata = report["outputs"]["EURUSD-M1-index-2026.csv"].clone();
+    fs::write(prepared.join("GBPUSD-M1-index-2026.csv"), original).unwrap();
     report["symbol"] = json!("GBPUSD");
-    report["outputs"] = json!({"GBPUSD-M1-bid-ask-2026.csv":metadata});
+    report["outputs"] = json!({"GBPUSD-M1-index-2026.csv":metadata});
     fs::write(f.root.join("quality-report.json"), report.to_string()).unwrap();
     let db = f.root.join("state.sqlite");
     assert!(forex_bot::data::import_history_symbol(&db, &f.root, "USDJPY").is_err());

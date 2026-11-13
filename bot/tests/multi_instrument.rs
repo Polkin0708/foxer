@@ -5,7 +5,8 @@ use forex_bot::{
 };
 use serde_json::{json, Value};
 fn rules() -> Value {
-    serde_json::from_str(include_str!("../../strategy/fvg-bot-rules.json")).unwrap()
+    let v: Value = serde_json::from_str(include_str!("../../strategy/fvg-bot-rules.json")).unwrap();
+    v
 }
 fn path(name: &str) -> std::path::PathBuf {
     std::env::temp_dir().join(format!("multi-{}-{name}.sqlite", std::process::id()))
@@ -40,18 +41,34 @@ fn configuration_accepts_multiple_pairs() {
     let c = serde_json::from_value(v).unwrap();
     assert!(forex_bot::validate(&c).is_ok());
 }
+fn fixture_tick(symbol: &str, price: i64) -> forex_bot::feed::Tick {
+    forex_bot::feed::Tick {
+        symbol: symbol.into(),
+        millis: 1_794_225_600_000,
+        price,
+        source: "upscale:index".into(),
+    }
+}
 #[test]
-fn feed_accepts_gbp_and_jpy_prices() {
-    for (symbol, bid, ask) in [("GBPUSD", 1.25, 1.2501), ("USDJPY", 153.123, 153.125)] {
-        assert!(forex_bot::feed::parse_tick(&json!({"symbol":symbol,"bid":bid,"ask":ask,"timestamp":"2026-11-09T12:00:00Z","source":"fixture"})).is_ok());
+fn aggregator_accepts_gbp_and_jpy_prices() {
+    for (symbol, price) in [("GBPUSD", 1_250_000), ("USDJPY", 153_123_000)] {
+        let mut a = forex_bot::feed::Aggregator::default();
+        a.push(fixture_tick(symbol, price)).unwrap();
+        let snapshot = serde_json::to_value(a).unwrap();
+        assert_eq!(snapshot["last"]["symbol"], symbol);
+        assert_eq!(snapshot["last"]["price"], price);
     }
 }
 #[test]
 fn different_symbols_are_not_duplicate_quotes() {
     let p = path("isolation");
     let mut r = Runtime::open(&p, rules(), Engine::default()).unwrap();
-    for (symbol, bid) in [("EURUSD", 1.1), ("GBPUSD", 1.3), ("USDJPY", 153.123)] {
-        let t=forex_bot::feed::parse_tick(&json!({"symbol":symbol,"bid":bid,"ask":bid+0.001,"timestamp":"2026-11-09T12:00:00Z","source":"fixture"})).unwrap();
+    for (symbol, price) in [
+        ("EURUSD", 1_100_000),
+        ("GBPUSD", 1_300_000),
+        ("USDJPY", 153_123_000),
+    ] {
+        let t = fixture_tick(symbol, price);
         r.tick(t, true).unwrap();
     }
     drop(r);
@@ -60,8 +77,8 @@ fn different_symbols_are_not_duplicate_quotes() {
     let markets = &entries[0].value["markets"];
     assert_eq!(markets.as_object().unwrap().len(), 3);
     assert_ne!(
-        markets["EURUSD"]["aggregator"]["last"]["bid"],
-        markets["USDJPY"]["aggregator"]["last"]["bid"]
+        markets["EURUSD"]["aggregator"]["last"]["price"],
+        markets["USDJPY"]["aggregator"]["last"]["price"]
     );
 }
 fn file_runtime(name: &str) -> (std::path::PathBuf, std::path::PathBuf, Runtime) {
@@ -163,57 +180,14 @@ fn interruption_after_file_write_uses_json_once_without_patch() {
     assert_eq!(r.pending().unwrap().len(), 1);
 }
 #[test]
-fn current_sqlite_is_upgraded_in_place_and_minutes_are_unchanged() {
-    let p = path("legacy");
+fn previous_database_is_not_rewritten_on_open() {
+    let p = path("previous-schema");
     let c = rusqlite::Connection::open(&p).unwrap();
-    c.execute_batch("PRAGMA application_id=1180190513;PRAGMA user_version=2;CREATE TABLE minutes(source TEXT,timestamp INTEGER,payload TEXT,PRIMARY KEY(source,timestamp));CREATE TABLE imports(digest TEXT PRIMARY KEY,report TEXT);CREATE TABLE inbox(id TEXT PRIMARY KEY,payload TEXT);CREATE TABLE entities(seq INTEGER PRIMARY KEY AUTOINCREMENT,kind TEXT,key TEXT,payload TEXT,UNIQUE(kind,key));CREATE TABLE outbox(seq INTEGER PRIMARY KEY AUTOINCREMENT,id TEXT UNIQUE,payload TEXT,delivered INTEGER DEFAULT 0);INSERT INTO minutes VALUES('fixture',1,'original-bytes');INSERT INTO imports VALUES('digest','original-report');").unwrap();
-    let legacy = json!({"engine":Engine::default(),"rules":rules(),"aggregator":{"last":null,"open":{}},"known":{},"offset":0,"queue":[],"api_down":false,"feed_down":false,"sequence":0,"usage":null});
-    c.execute(
-        "INSERT INTO entities(kind,key,payload) VALUES('runtime','coordinator',?1)",
-        [legacy.to_string()],
-    )
-    .unwrap();
+    c.execute_batch("PRAGMA application_id=1180190513; PRAGMA user_version=3; CREATE TABLE minutes(payload TEXT); INSERT INTO minutes VALUES('original-bytes');").unwrap();
     drop(c);
-    for _ in 0..2 {
-        drop(forex_bot::data::open(&p).unwrap());
-    }
-    let c = rusqlite::Connection::open(&p).unwrap();
-    assert_eq!(
-        c.query_row(
-            "SELECT symbol,source,timestamp,payload FROM minutes",
-            [],
-            |r| Ok((
-                r.get::<_, String>(0)?,
-                r.get::<_, String>(1)?,
-                r.get::<_, i64>(2)?,
-                r.get::<_, String>(3)?
-            ))
-        )
-        .unwrap(),
-        (
-            "EURUSD".into(),
-            "fixture".into(),
-            1,
-            "original-bytes".into()
-        )
-    );
-    let snap: String = c
-        .query_row("SELECT payload FROM entities", [], |r| r.get(0))
-        .unwrap();
-    assert!(serde_json::from_str::<Value>(&snap)
-        .unwrap()
-        .get("rules")
-        .is_none());
-    c.execute(
-        "INSERT INTO minutes VALUES('USDJPY','fixture',1,'jpy-bytes')",
-        [],
-    )
-    .unwrap();
-    assert_eq!(
-        c.query_row("SELECT count(*) FROM minutes", [], |r| r.get::<_, i64>(0))
-            .unwrap(),
-        2
-    );
+    let before = std::fs::read(&p).unwrap();
+    assert!(forex_bot::data::open(&p).is_err());
+    assert_eq!(std::fs::read(&p).unwrap(), before);
 }
 #[test]
 fn quotes_only_track_their_instrument_and_repeat_safely_after_restart() {
@@ -227,8 +201,7 @@ fn quotes_only_track_their_instrument_and_repeat_safely_after_restart() {
             Side::Long,
             Quote {
                 time: 1,
-                bid: 10000,
-                ask: 10001,
+                price: 10000,
             },
             9000,
             15000,
@@ -243,18 +216,18 @@ fn quotes_only_track_their_instrument_and_repeat_safely_after_restart() {
         let t = forex_bot::feed::Tick {
             symbol: symbol.into(),
             millis: 2000,
-            bid: 10000,
-            ask: 10001,
-            source: "test".into(),
+            price: 10000,
+
+            source: "upscale:index".into(),
         };
         r.tick(t, false).unwrap();
     }
     let t = forex_bot::feed::Tick {
         symbol: "USDJPY".into(),
         millis: 3000,
-        bid: 8900,
-        ask: 8901,
-        source: "test".into(),
+        price: 8900,
+
+        source: "upscale:index".into(),
     };
     r.tick(t.clone(), false).unwrap();
     assert_eq!(r.signal_context("USDJPY:same")["state"], "Stop");
@@ -342,8 +315,7 @@ fn telegram_rule_change_preserves_published_levels_for_all_pairs() {
         e.quote(
             Quote {
                 time: 12,
-                bid: 130 * scale,
-                ask: 131 * scale,
+                price: 130 * scale,
             },
             tick,
             &cfg,

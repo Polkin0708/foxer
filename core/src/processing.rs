@@ -46,8 +46,7 @@ pub fn process(
     }
     let q = crate::trading::Quote {
         time: t.millis / 1000,
-        bid: t.bid,
-        ask: t.ask,
+        price: t.price,
     };
     if allow {
         e.quote(q, step, c)?;

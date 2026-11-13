@@ -38,12 +38,26 @@ pub fn price(s: &str) -> Result<i64> {
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Minute {
     pub timestamp: i64,
-    pub bid: [i64; 4],
-    pub ask: [i64; 4],
+    pub price: [i64; 4],
+
     pub quotes: u64,
     pub gap_before_minutes: u64,
 }
 pub fn parse_record(headers: &csv::StringRecord, row: &csv::StringRecord) -> Result<Minute> {
+    let expected = [
+        "timestamp_utc",
+        "timestamp_ms",
+        "bar_end_utc",
+        "open",
+        "high",
+        "low",
+        "close",
+        "quote_count",
+        "gap_before_minutes",
+    ];
+    if headers.iter().ne(expected) || row.len() != expected.len() {
+        return Err("invalid index minute columns".into());
+    }
     let get = |name: &str| {
         headers
             .iter()
@@ -61,18 +75,13 @@ pub fn parse_record(headers: &csv::StringRecord, row: &csv::StringRecord) -> Res
     {
         return Err("inconsistent minute timestamps".into());
     }
-    let mut sides = [[0; 4]; 2];
-    for (i, side) in ["bid", "ask"].iter().enumerate() {
-        for (j, field) in ["open", "high", "low", "close"].iter().enumerate() {
-            sides[i][j] = price(get(&format!("{side}_{field}"))?)?;
-        }
-        let [o, h, l, c] = sides[i];
-        if h < o || h < c || l > o || l > c || l > h {
-            return Err("invalid OHLC".into());
-        }
+    let mut ohlc = [0; 4];
+    for (i, field) in ["open", "high", "low", "close"].iter().enumerate() {
+        ohlc[i] = price(get(field)?)?;
     }
-    if sides[1][0] < sides[0][0] || sides[1][3] < sides[0][3] {
-        return Err("crossed bid/ask".into());
+    let [o, h, l, c] = ohlc;
+    if h < o || h < c || l > o || l > c || l > h {
+        return Err("invalid OHLC".into());
     }
     let quotes = get("quote_count")?
         .parse()
@@ -82,8 +91,8 @@ pub fn parse_record(headers: &csv::StringRecord, row: &csv::StringRecord) -> Res
     }
     Ok(Minute {
         timestamp,
-        bid: sides[0],
-        ask: sides[1],
+        price: ohlc,
+
         quotes,
         gap_before_minutes: get("gap_before_minutes")?
             .parse()

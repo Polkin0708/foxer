@@ -7,5 +7,5 @@ CREATE TABLE inbox(id TEXT PRIMARY KEY,payload TEXT NOT NULL);
 CREATE TABLE minutes(symbol TEXT NOT NULL,source TEXT NOT NULL,timestamp INTEGER NOT NULL,payload TEXT NOT NULL,PRIMARY KEY(symbol,source,timestamp));
 CREATE TABLE outbox(seq INTEGER PRIMARY KEY AUTOINCREMENT,id TEXT NOT NULL UNIQUE,payload TEXT NOT NULL,delivered INTEGER NOT NULL DEFAULT 0 CHECK(delivered IN (0,1)));
 PRAGMA application_id = 1180190513;
-PRAGMA user_version = 3;
+PRAGMA user_version = 4;
 COMMIT;

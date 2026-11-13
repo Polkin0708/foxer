@@ -329,70 +329,6 @@ pub enum PoliciesExecutionPendingCancelOnItem {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Deserialize, Serialize)]
-pub enum PoliciesExecutionPendingCancelQuoteSidesLong {
-    #[serde(rename = "bid")]
-    Bid,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Deserialize, Serialize)]
-pub enum PoliciesExecutionPendingCancelQuoteSidesShort {
-    #[serde(rename = "ask")]
-    Ask,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct PoliciesExecutionPendingCancelQuoteSides {
-    pub long: PoliciesExecutionPendingCancelQuoteSidesLong,
-    pub short: PoliciesExecutionPendingCancelQuoteSidesShort,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Deserialize, Serialize)]
-pub enum PoliciesExecutionQuoteSidesLongEntry {
-    #[serde(rename = "ask")]
-    Ask,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Deserialize, Serialize)]
-pub enum PoliciesExecutionQuoteSidesLongExit {
-    #[serde(rename = "bid")]
-    Bid,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct PoliciesExecutionQuoteSidesLong {
-    pub entry: PoliciesExecutionQuoteSidesLongEntry,
-    pub exit: PoliciesExecutionQuoteSidesLongExit,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Deserialize, Serialize)]
-pub enum PoliciesExecutionQuoteSidesShortEntry {
-    #[serde(rename = "bid")]
-    Bid,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Deserialize, Serialize)]
-pub enum PoliciesExecutionQuoteSidesShortExit {
-    #[serde(rename = "ask")]
-    Ask,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct PoliciesExecutionQuoteSidesShort {
-    pub entry: PoliciesExecutionQuoteSidesShortEntry,
-    pub exit: PoliciesExecutionQuoteSidesShortExit,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct PoliciesExecutionQuoteSides {
-    pub long: PoliciesExecutionQuoteSidesLong,
-    pub short: PoliciesExecutionQuoteSidesShort,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Deserialize, Serialize)]
 pub enum PoliciesExecutionLimitEntry {
     #[serde(rename = "solve_rr_min_keep_stop_target")]
     SolveRrMinKeepStopTarget,
@@ -419,8 +355,6 @@ pub struct PoliciesExecution {
     pub market_quote: PoliciesExecutionMarketQuote,
     pub market_timing: PoliciesExecutionMarketTiming,
     pub pending_cancel_on: Vec<PoliciesExecutionPendingCancelOnItem>,
-    pub pending_cancel_quote_sides: PoliciesExecutionPendingCancelQuoteSides,
-    pub quote_sides: PoliciesExecutionQuoteSides,
     pub limit_entry: PoliciesExecutionLimitEntry,
     pub pending_zone_break: PoliciesExecutionPendingZoneBreak,
     pub entry_mode: PoliciesExecutionEntryMode,

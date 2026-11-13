@@ -17,7 +17,8 @@ fn path() -> PathBuf {
     ))
 }
 fn rules() -> Value {
-    serde_json::from_str(include_str!("../../strategy/fvg-bot-rules.json")).unwrap()
+    let v: Value = serde_json::from_str(include_str!("../../strategy/fvg-bot-rules.json")).unwrap();
+    v
 }
 fn open_test(p: &std::path::Path) -> Result<Runtime, String> {
     let file = p.with_extension("json");
@@ -115,8 +116,7 @@ fn quotes_track_published_signal_during_api_outage_and_data_gate() {
         forex_bot::trading::Side::Long,
         forex_bot::trading::Quote {
             time: 1,
-            bid: 100,
-            ask: 101,
+            price: 100,
         },
         90,
         150,
@@ -131,9 +131,9 @@ fn quotes_track_published_signal_during_api_outage_and_data_gate() {
     let t = forex_bot::feed::Tick {
         symbol: "EURUSD".into(),
         millis: 2000,
-        bid: 89,
-        ask: 90,
-        source: "test".into(),
+        price: 89,
+
+        source: "upscale:index".into(),
     };
     r.tick(t.clone(), false).unwrap();
     r.tick(t, false).unwrap();
@@ -201,9 +201,9 @@ fn restart_does_not_publish_a_bar_that_spans_process_downtime() {
         forex_bot::feed::Tick {
             symbol: "EURUSD".into(),
             millis: start,
-            bid: 100,
-            ask: 101,
-            source: "test".into(),
+            price: 100,
+
+            source: "upscale:index".into(),
         },
         true,
     )
@@ -214,9 +214,9 @@ fn restart_does_not_publish_a_bar_that_spans_process_downtime() {
         forex_bot::feed::Tick {
             symbol: "EURUSD".into(),
             millis: start + 14400000,
-            bid: 105,
-            ask: 106,
-            source: "test".into(),
+            price: 105,
+
+            source: "upscale:index".into(),
         },
         true,
     )
@@ -265,7 +265,7 @@ fn weekly_state_change_is_announced_once_even_without_trade_entry() {
     assert_eq!(engine.trend(Timeframe::W), Some(Side::Long));
     let mut r = Runtime::open(&path(), rules, engine).unwrap();
     let start = 338400_i64 * 1000;
-    for (millis, bid) in [
+    for (millis, price) in [
         (start, 130),
         (start + 1000, 95),
         (start + 604800000, 96),
@@ -275,9 +275,9 @@ fn weekly_state_change_is_announced_once_even_without_trade_entry() {
             forex_bot::feed::Tick {
                 symbol: "EURUSD".into(),
                 millis,
-                bid,
-                ask: bid + 1,
-                source: "test".into(),
+                price,
+
+                source: "upscale:index".into(),
             },
             true,
         )
@@ -295,9 +295,9 @@ fn log_tick(seconds: i64) -> forex_bot::feed::Tick {
     forex_bot::feed::Tick {
         symbol: "EURUSD".into(),
         millis: seconds * 1000,
-        bid: 1100000,
-        ask: 1100010,
-        source: "fixture".into(),
+        price: 1100000,
+
+        source: "upscale:index".into(),
     }
 }
 #[test]
@@ -434,9 +434,9 @@ fn h4_log_reports_new_signal_not_existing_signal_as_new() {
     let t = |sec: i64| forex_bot::feed::Tick {
         symbol: "EURUSD".into(),
         millis: sec * 1000,
-        bid: 130,
-        ask: 131,
-        source: "fixture".into(),
+        price: 130,
+
+        source: "upscale:index".into(),
     };
     r.tick_logged(t(79200), true).unwrap();
     let logs = r.tick_logged(t(93600), true).unwrap();

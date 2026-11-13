@@ -8,6 +8,7 @@ pub struct Settings {
     pub model: String,
     pub telegram_token: String,
     pub openai_key: String,
+    pub upscale_key: Option<String>,
     pub max_tokens: u32,
     pub database: PathBuf,
     pub strategy: PathBuf,
@@ -28,6 +29,7 @@ impl Settings {
             "STRATEGY_PATH",
             "QUOTE_STALE_SECONDS",
             "PRICE_TICK",
+            "UPSCALE_API_KEY",
         ];
         let mut values = BTreeMap::new();
         for line in text
@@ -57,7 +59,7 @@ impl Settings {
             }
         }
         for name in names {
-            if name != "PRICE_TICK" && !values.contains_key(name) {
+            if !matches!(name, "PRICE_TICK" | "UPSCALE_API_KEY") && !values.contains_key(name) {
                 return Err(format!("missing setting: {name}"));
             }
         }
@@ -81,6 +83,7 @@ impl Settings {
             model: values["OPENAI_MODEL"].into(),
             telegram_token: values["TELEGRAM_BOT_TOKEN"].into(),
             openai_key: values["OPENAI_API_KEY"].into(),
+            upscale_key: values.get("UPSCALE_API_KEY").map(|key| (*key).to_owned()),
             max_tokens,
             database: values["DATABASE_PATH"].into(),
             strategy: values["STRATEGY_PATH"].into(),

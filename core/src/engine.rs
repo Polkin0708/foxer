@@ -800,7 +800,7 @@ impl Engine {
                     continue;
                 }
             };
-            let entry = if p.side == Side::Long { q.ask } else { q.bid };
+            let entry = q.price;
             let Some(target) = self.target(p.side, p.poi_tf, entry, stop, c) else {
                 continue;
             };

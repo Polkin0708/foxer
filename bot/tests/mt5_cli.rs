@@ -53,14 +53,13 @@ impl Fixture {
             export.to_str().unwrap(),
             self.root.join("hist").to_str().unwrap(),
             "EURUSD",
-            "100",
             "MT5 broker export (test)",
         ])
     }
     fn prepared(&self, month: &str) -> String {
         fs::read_to_string(
             self.root
-                .join(format!("hist/prepared/EURUSD-M1-bid-ask-{month}.csv")),
+                .join(format!("hist/prepared/EURUSD-M1-index-{month}.csv")),
         )
         .unwrap()
     }
@@ -121,7 +120,7 @@ fn converts_server_time_to_utc_in_winter_and_summer() {
 }
 
 #[test]
-fn ask_is_bid_plus_fixed_spread_and_server_spread_is_ignored() {
+fn exported_ohlc_becomes_index_price_and_server_spread_is_ignored() {
     let f = Fixture::new();
     let mut a = row(
         "2026.02.02",
@@ -136,8 +135,8 @@ fn ask_is_bid_plus_fixed_spread_and_server_spread_is_ignored() {
     ok(&f.prepare(&[&a]));
     assert!(f
         .prepared("2026-02")
-        .contains(",1.080000,1.080100,1.079900,1.080050,1.080100,1.080200,1.080000,1.080150,5,0"));
-    assert_eq!(f.report()["ask_model"]["spread_millionths"], 100);
+        .contains(",1.080000,1.080100,1.079900,1.080050,5,0"));
+    assert!(!f.prepared("2026-02").contains("ask"));
 }
 
 #[test]
@@ -152,8 +151,12 @@ fn counts_missing_minutes_and_lists_weekday_gaps_only() {
     let refs: Vec<&str> = rows.iter().map(String::as_str).collect();
     ok(&f.prepare(&refs));
     let csv = f.prepared("2026-02");
-    assert!(csv.contains("2026-02-06T08:03:00Z,1770364980000,2026-02-06T08:04:00Z,1.100000,1.100000,1.100000,1.100000,1.100100,1.100100,1.100100,1.100100,1,2"));
-    assert!(csv.contains("2026-02-06T10:04:00Z,1770372240000,2026-02-06T10:05:00Z,1.100000,1.100000,1.100000,1.100000,1.100100,1.100100,1.100100,1.100100,1,120"));
+    assert!(csv.contains("2026-02-06T08:03:00Z,1770364980000,2026-02-06T08:04:00Z,1.100000,1.100000,1.100000,1.100000,1,2"));
+    assert!(csv.contains("2026-02-06T10:04:00Z,1770372240000,2026-02-06T10:05:00Z,1.100000,1.100000,1.100000,1.100000,1,120"));
+    assert_eq!(
+        f.report()["gaps"],
+        serde_json::json!([{"from_ms": 1770364980000i64 + 60_000, "to_ms": 1770372240000i64}])
+    );
     let gaps = fs::read_to_string(f.root.join("hist/prepared/gaps.csv")).unwrap();
     assert_eq!(
         gaps,
@@ -194,7 +197,6 @@ fn rejects_unordered_rows_bad_ohlc_empty_minutes_and_bad_header() {
         f.root.join("bad.csv").to_str().unwrap(),
         f.root.join("hist").to_str().unwrap(),
         "EURUSD",
-        "100",
         "x",
     ]);
     assert!(!out.status.success());
@@ -218,7 +220,6 @@ fn refuses_to_write_into_non_empty_directory_or_with_empty_source() {
         export.to_str().unwrap(),
         g.root.join("hist").to_str().unwrap(),
         "EURUSD",
-        "100",
         " ",
     ]);
     assert!(!out.status.success());

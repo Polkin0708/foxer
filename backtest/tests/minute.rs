@@ -9,8 +9,7 @@ const T: i64 = 1_770_192_000; // 2026-02-04T08:00:00Z
 fn minute(o: i64, h: i64, l: i64, c: i64) -> Minute {
     Minute {
         timestamp: T,
-        bid: [o, h, l, c],
-        ask: [o + 100, h + 100, l + 100, c + 100],
+        price: [o, h, l, c],
         quotes: 1,
         gap_before_minutes: 0,
     }
@@ -21,19 +20,17 @@ fn trade(side: &str, state: &str, entry: i64, stop: i64, tp: i64) -> Value {
 }
 
 #[test]
-fn four_quotes_inside_the_minute_with_fixed_spread() {
+fn four_index_quotes_inside_the_minute() {
     let m = minute(1_100_000, 1_100_500, 1_099_000, 1_100_200);
     let ticks = synthetic_ticks(&m, "EURUSD", "src", Order::LowFirst);
     let times: Vec<_> = ticks.iter().map(|t| t.millis - T * 1000).collect();
     assert_eq!(times, [0, 20_000, 40_000, 59_000]);
-    let bids: Vec<_> = ticks.iter().map(|t| t.bid).collect();
-    assert_eq!(bids, [1_100_000, 1_099_000, 1_100_500, 1_100_200]);
-    assert!(ticks
-        .iter()
-        .all(|t| t.ask - t.bid == 100 && t.source == "src"));
+    let prices: Vec<_> = ticks.iter().map(|t| t.price).collect();
+    assert_eq!(prices, [1_100_000, 1_099_000, 1_100_500, 1_100_200]);
+    assert!(ticks.iter().all(|t| t.source == "src"));
     let high_first: Vec<_> = synthetic_ticks(&m, "EURUSD", "src", Order::HighFirst)
         .iter()
-        .map(|t| t.bid)
+        .map(|t| t.price)
         .collect();
     assert_eq!(high_first, [1_100_000, 1_100_500, 1_099_000, 1_100_200]);
 }
@@ -49,9 +46,8 @@ fn active_long_with_reachable_stop_goes_low_first() {
 }
 
 #[test]
-fn active_short_with_reachable_stop_goes_high_first_on_ask() {
-    // bid high 1.10095 + spread 0.0001 reaches the short stop at 1.10100 only via ask
-    let m = minute(1_100_000, 1_100_950, 1_098_000, 1_099_000);
+fn active_short_with_reachable_stop_goes_high_first() {
+    let m = minute(1_100_000, 1_101_050, 1_098_000, 1_099_000);
     let trades = [trade("Short", "Active", 1_100_000, 1_101_000, 1_098_500)];
     assert_eq!(
         intrabar_order(&m, &trades, "EURUSD"),
@@ -118,12 +114,12 @@ fn backtest_runs_on_mt5_minutes_without_tick_archives() {
     let mut outputs = serde_json::Map::new();
     let mut month = String::new();
     let mut csv = String::new();
-    let header = "timestamp_utc,timestamp_ms,bar_end_utc,bid_open,bid_high,bid_low,bid_close,ask_open,ask_high,ask_low,ask_close,quote_count,gap_before_minutes\n";
+    let header = "timestamp_utc,timestamp_ms,bar_end_utc,open,high,low,close,quote_count,gap_before_minutes\n";
     let mut flush = |month: &str, csv: &str| {
         if csv.is_empty() {
             return;
         }
-        let name = format!("EURUSD-M1-bid-ask-{month}.csv");
+        let name = format!("EURUSD-M1-index-{month}.csv");
         fs::write(root.join("prepared").join(&name), csv).unwrap();
         outputs.insert(
             name,
@@ -138,7 +134,7 @@ fn backtest_runs_on_mt5_minutes_without_tick_archives() {
             csv = header.to_owned();
         }
         csv.push_str(&format!(
-            "{iso},{},{},1.100000,1.100200,1.099800,1.100100,1.100100,1.100300,1.099900,1.100200,3,0\n",
+            "{iso},{},{},1.100000,1.100200,1.099800,1.100100,3,0\n",
             t * 1000,
             forex_core::prices::iso(t + 60).unwrap()
         ));
@@ -146,7 +142,7 @@ fn backtest_runs_on_mt5_minutes_without_tick_archives() {
     flush(&month, &csv);
     fs::write(
         root.join("quality-report.json"),
-        json!({"symbol":"EURUSD","source":"MT5 test export","timezone_conversion":"MT5 server time = America/New_York +7h to UTC","timestamp_reversals":[],"missing_months":[],"outputs":outputs}).to_string(),
+        json!({"symbol":"EURUSD","source":"MT5 test export","price_basis":"index","timezone":"UTC","origin":"mt5_m1_bars","gaps":[],"missing_months":[],"outputs":outputs}).to_string(),
     )
     .unwrap();
     fs::write(

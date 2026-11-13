@@ -281,8 +281,7 @@ fn legacy_hash_upgrade_preserves_published_signals_queue_and_plan_identity_once(
         Side::Long,
         Quote {
             time: 11,
-            bid: 100,
-            ask: 101,
+            price: 100,
         },
         90,
         150,

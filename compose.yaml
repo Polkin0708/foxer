@@ -21,7 +21,7 @@ services:
       - /tmp
     volumes:
       - ./strategy:/app/strategy:ro
-      - ./data/history:/app/data/history:ro
+      - ./data/index-history:/app/data/index-history:ro
       - ./backtest/data-sources.json:/app/backtest/data-sources.json:ro
       - ./reports/backtests:/app/reports/backtests
 volumes:

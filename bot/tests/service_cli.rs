@@ -54,3 +54,15 @@ fn smoke_binary_restores_queue_and_refuses_existing_database() {
     assert!(!out.status.success());
     assert_eq!(std::fs::read(&p).unwrap(), before);
 }
+
+#[test]
+fn upscale_probe_checks_env_without_starting_service() {
+    let p = path();
+    let out = exe()
+        .args(["probe-upscale", p.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("cannot read service settings"));
+    assert!(out.stdout.is_empty());
+}
