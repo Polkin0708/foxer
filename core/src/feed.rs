@@ -46,6 +46,7 @@ impl Aggregator {
             }
         }
         if let Some(end) = self.minute_end.take() {
+            let end = crate::calendar::after_market_closure(end);
             if t.millis >= end * 1000 {
                 for b in self.open.values_mut() {
                     if b.bar.end > end && t.millis > end * 1000 {
@@ -104,7 +105,8 @@ impl Aggregator {
         minute: &crate::prices::Minute,
     ) -> Result<Vec<(Timeframe, Candle)>, String> {
         if minute.gap_before_minutes > 0 {
-            let covered = self.minute_end.unwrap_or(minute.timestamp);
+            let covered =
+                crate::calendar::after_market_closure(self.minute_end.unwrap_or(minute.timestamp));
             for b in self.open.values_mut() {
                 if b.bar.end > covered {
                     b.complete = false;

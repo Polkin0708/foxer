@@ -1,6 +1,6 @@
 //! Shared wall-clock candle boundaries. UTC is used for storage and event ordering.
 use crate::engine::Timeframe;
-use chrono::{Datelike, Duration, TimeZone, Utc};
+use chrono::{Datelike, Duration, TimeZone, Timelike, Utc};
 use chrono_tz::America::New_York;
 
 pub fn bounds(timestamp: i64, tf: Timeframe) -> Result<(i64, i64), String> {
@@ -53,4 +53,21 @@ pub fn entry_window(started: i64, policy: &str) -> Result<i64, String> {
         }
         _ => Err("unsupported entry window".into()),
     }
+}
+
+/// End of the market week: if `end` is Friday 17:00 New York, the next expected
+/// quote time is Sunday 17:00 New York; otherwise `end` itself.
+pub fn after_market_closure(end: i64) -> i64 {
+    let Some(local) = Utc.timestamp_opt(end, 0).single() else {
+        return end;
+    };
+    let local = local.with_timezone(&New_York);
+    if local.weekday() != chrono::Weekday::Fri || local.hour() != 17 || local.minute() != 0 {
+        return end;
+    }
+    let sunday = local.date_naive() + Duration::days(2);
+    sunday
+        .and_hms_opt(17, 0, 0)
+        .and_then(|l| New_York.from_local_datetime(&l).earliest())
+        .map_or(end, |t| t.timestamp())
 }
