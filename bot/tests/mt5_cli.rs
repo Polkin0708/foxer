@@ -140,7 +140,7 @@ fn exported_ohlc_becomes_index_price_and_server_spread_is_ignored() {
 }
 
 #[test]
-fn counts_missing_minutes_and_lists_weekday_gaps_only() {
+fn short_tickless_gaps_are_not_data_loss_and_weekday_gaps_are_listed() {
     let f = Fixture::new();
     let rows = [
         row("2026.02.06", "10:00:00", "1.1", "1.1", "1.1", "1.1", 1),
@@ -151,7 +151,7 @@ fn counts_missing_minutes_and_lists_weekday_gaps_only() {
     let refs: Vec<&str> = rows.iter().map(String::as_str).collect();
     ok(&f.prepare(&refs));
     let csv = f.prepared("2026-02");
-    assert!(csv.contains("2026-02-06T08:03:00Z,1770364980000,2026-02-06T08:04:00Z,1.100000,1.100000,1.100000,1.100000,1,2"));
+    assert!(csv.contains("2026-02-06T08:03:00Z,1770364980000,2026-02-06T08:04:00Z,1.100000,1.100000,1.100000,1.100000,1,0"));
     assert!(csv.contains("2026-02-06T10:04:00Z,1770372240000,2026-02-06T10:05:00Z,1.100000,1.100000,1.100000,1.100000,1,120"));
     assert_eq!(
         f.report()["gaps"],

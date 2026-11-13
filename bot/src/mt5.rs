@@ -118,7 +118,13 @@ pub fn prepare_mt5(export: &Path, root: &Path, symbol: &str, source: &str) -> Re
                     gaps.push_str(&format!("{},{},{missing}\n", iso(pts + 60)?, iso(ts)?));
                     gap_list.push(json!({"from_ms": (pts + 60) * 1000, "to_ms": ts * 1000}));
                 }
-                missing
+                // Minutes without ticks are absent from MT5 exports; only real
+                // gaps (over 60 minutes) break candle completeness.
+                if ts - pts > 3600 {
+                    missing
+                } else {
+                    0
+                }
             }
         };
         let out = months

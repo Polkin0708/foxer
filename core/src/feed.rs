@@ -78,7 +78,9 @@ impl Aggregator {
             let complete = self
                 .open
                 .get(&tf)
-                .map(|o| o.bar.end == start)
+                .map(|o| {
+                    o.bar.end == start || crate::calendar::after_market_closure(o.bar.end) == start
+                })
                 .unwrap_or(t.millis == start * 1000);
             self.open.insert(
                 tf,
@@ -113,6 +115,9 @@ impl Aggregator {
                 }
             }
         }
+        // Prepared minutes carry their own gap information; the tick-time
+        // continuity check belongs to live quotes.
+        self.minute_end = None;
         let bars = self.push(Tick {
             symbol: symbol.into(),
             source: source.into(),

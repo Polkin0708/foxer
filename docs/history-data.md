@@ -49,8 +49,9 @@ quote_count — `<TICKVOL>`, минута без тиков отклоняетс
 quality-report.json: source, symbol, price_basis="index", timezone="UTC",
 origin="mt5_m1_bars", timezone_conversion, index_model, gaps (разрывы длиннее
 60 минут вне выходных как {from_ms,to_ms}), missing_months, outputs.
-Пропущенные минуты не заполняются; gap_before_minutes — число отсутствующих
-минут перед строкой.
+Пропущенные минуты не заполняются. Минута без тиков в выгрузке MT5 отсутствует и
+потерей данных не считается: gap_before_minutes равен числу отсутствующих минут
+только для разрывов длиннее 60 минут (тех же, что в gaps), иначе 0.
 
 ## Минутный режим бэктеста
 

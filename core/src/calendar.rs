@@ -55,18 +55,21 @@ pub fn entry_window(started: i64, policy: &str) -> Result<i64, String> {
     }
 }
 
-/// End of the market week: if `end` is Friday 17:00 New York, the next expected
-/// quote time is Sunday 17:00 New York; otherwise `end` itself.
+/// Quote time expected after `end`: if `end` falls inside the weekly market
+/// closure (Friday from 16:00 to Sunday 17:00 America/New_York), the next
+/// Sunday 17:00; otherwise `end` itself.
 pub fn after_market_closure(end: i64) -> i64 {
-    let Some(local) = Utc.timestamp_opt(end, 0).single() else {
+    let Some(utc) = Utc.timestamp_opt(end, 0).single() else {
         return end;
     };
-    let local = local.with_timezone(&New_York);
-    if local.weekday() != chrono::Weekday::Fri || local.hour() != 17 || local.minute() != 0 {
-        return end;
-    }
-    let sunday = local.date_naive() + Duration::days(2);
-    sunday
+    let local = utc.with_timezone(&New_York);
+    let days_to_sunday = match local.weekday() {
+        chrono::Weekday::Fri if local.hour() >= 16 => 2,
+        chrono::Weekday::Sat => 1,
+        chrono::Weekday::Sun if local.hour() < 17 => 0,
+        _ => return end,
+    };
+    (local.date_naive() + Duration::days(days_to_sunday))
         .and_hms_opt(17, 0, 0)
         .and_then(|l| New_York.from_local_datetime(&l).earliest())
         .map_or(end, |t| t.timestamp())
