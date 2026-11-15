@@ -1,0 +1,92 @@
+{
+  "schema_version": 3,
+  "base": "strategy/fvg-bot-rules.json schema_version 2",
+  "comment": "Только отличия от schema_version 2. Поля comment — пояснения, не условия расчёта. Каждое поле требует поддержки в движке; текущий парсер v2 их отклонит.",
+  "instruments": [
+    {"symbol": "EURUSD", "price_tick": 1, "overrides": {"modules.range_trading": true, "exit.reference_index_close": true, "take_profit.mode": "fixed_rr"}},
+    {"symbol": "GBPUSD", "price_tick": 10, "overrides": {"modules.range_trading": false, "exit.reference_index_close": false, "take_profit.mode": "fixed_rr"}},
+    {"symbol": "USDJPY", "price_tick": 1000, "overrides": {"modules.range_trading": true, "exit.reference_index_close": false, "take_profit.mode": "structural_target_capped"}}
+  ],
+  "parameters": {
+    "rr_fixed": {"value": 2.0, "comment": "Тейк в R для take_profit.mode = fixed_rr."},
+    "rr_target_cap": {"value": 5.0, "comment": "Потолок тейка в R для take_profit.mode = structural_target_capped."},
+    "range_window_h4_bars_min": {"value": 12, "comment": "Минимальная длина окна проторговки в закрытых H4-свечах."},
+    "range_window_h4_bars_max": {"value": 60, "comment": "Максимальная длина окна проторговки."},
+    "range_height_min_atr_d": {"value": 0.4, "comment": "Минимальная высота диапазона в ATR(D)."},
+    "range_height_max_atr_d": {"value": 1.5, "comment": "Максимальная высота диапазона в ATR(D)."},
+    "range_impulse_h4_bars": {"value": 12, "comment": "Окно импульса: H4-свечи непосредственно перед окном проторговки."},
+    "range_impulse_min_atr_d": {"value": 1.5, "comment": "Минимальный ход импульса (max high − min low окна) в ATR(D)."},
+    "range_impulse_min_ratio_to_height": {"value": 1.2, "comment": "Минимальное отношение хода импульса к высоте диапазона."},
+    "range_wick_min_pips": {"value": 10, "comment": "Минимальный вынос за границу для агрессивного входа по фитилю."},
+    "range_max_stops_per_border": {"value": 2, "comment": "После стольких стопов от одной границы граница не торгуется."},
+    "range_break_height_fraction": {"value": 0.5, "comment": "Закрытие H4 за границей дальше этой доли высоты закрывает диапазон."},
+    "trade_window_start": {"value": "01:00", "comment": "America/New_York. Соответствует 08:00 Europe/Kyiv."},
+    "trade_window_end": {"value": "17:00", "comment": "America/New_York. Соответствует 24:00 Europe/Kyiv."}
+  },
+  "policies": {
+    "plans": {
+      "correction_confirmation_timeframe": "D_unless_no_live_opposite_D_zone_before_target_then_H4",
+      "comment": "Для планов коррекции: если между последним закрытием D и целью нет живой D FVG против направления плана, подтверждение ищется на H4, иначе на D."
+    },
+    "take_profit": {
+      "mode": "fixed_rr",
+      "allowed": ["fixed_rr", "structural_target_capped"],
+      "fixed_rr": "entry_plus_rr_fixed_when_target_rr_at_least_rr_min",
+      "structural_target_capped": "min(target, entry_plus_rr_target_cap)",
+      "below_minimum": "limit_entry_at_rr_min_keep_stop_and_target"
+    },
+    "trade_window": {
+      "mode": "session_window",
+      "session_filter": true,
+      "applies_to": ["market_entry", "limit_fill"],
+      "outside_window": "skip_signal"
+    },
+    "exit": {
+      "reference_index_close": false,
+      "reference_index": {
+        "symbol": "DXY",
+        "source": "upscale_index_or_synthetic",
+        "synthetic_formula": {"constant": 50.14348112, "weights": {"EURUSD": -0.576, "USDJPY": 0.136, "GBPUSD": -0.119, "USDCAD": 0.091, "USDSEK": 0.042, "USDCHF": 0.036}},
+        "direction_sign": {"EURUSD": -1},
+        "plans_computed": true,
+        "signals_published": false
+      },
+      "close_on": ["reference_plan_target_reached", "reference_range_border_swept"],
+      "condition": "event_time_after_fill_and_event_direction_equals_trade_direction_times_sign",
+      "action": "close_at_first_available_quote"
+    },
+    "range": {
+      "box": "longest_window_within_height_limits_excluding_current_bar",
+      "requires_impulse_before_window": true,
+      "one_box_per_impulse": true,
+      "box_frozen_until": ["range_trade_closed", "h4_close_beyond_border_by_break_fraction"],
+      "entry": ["h4_close_back_inside_after_close_outside", "h4_close_inside_with_wick_beyond_border_at_least_wick_min"],
+      "stop": "deviation_extreme_plus_stop_buffer_atr",
+      "target": "opposite_border",
+      "take_profit": "min(opposite_border, entry_plus_rr_fixed)",
+      "below_minimum": "limit_entry_at_rr_min_inside_box",
+      "one_open_range_trade": true,
+      "blocks_zone_entries_inside_box": false
+    },
+    "modules": {
+      "range_trading": true,
+      "comment": "Переопределяется на инструмент в instruments[].overrides."
+    },
+    "rejected_after_backtest": {
+      "reference_index_confirmation_for_entry": false,
+      "max_two_attempts_per_idea": false,
+      "range_blocks_zone_entries": false,
+      "structural_target_on_EURUSD_GBPUSD": false,
+      "reference_index_close_on_GBPUSD_USDJPY": false,
+      "comment": "Проверено на 2020–2026 и отклонено; оставлено, чтобы не проверять повторно."
+    }
+  },
+  "backtest_reference": {
+    "engine": "python prototype runs/hadiukov/engine.py, не foxer",
+    "data": "MT5 M1 2020-09..2026-11, 1 pip cost per trade, risk 1R",
+    "session_window": {"trades": 453, "net_r": 87.7, "win_rate": 0.40, "max_drawdown_r": 19.3, "max_losing_streak": 10, "trades_per_month": 6.0,
+      "by_symbol": {"EURUSD": {"trades": 194, "net_r": 7.3}, "GBPUSD": {"trades": 96, "net_r": 35.8}, "USDJPY": {"trades": 163, "net_r": 44.7}},
+      "by_year": {"2020": 3.9, "2021": 11.4, "2022": 39.8, "2023": -4.7, "2024": 0.5, "2025": 23.7, "2026": 13.3}},
+    "all_hours": {"trades": 518, "net_r": 65.8, "win_rate": 0.38, "max_drawdown_r": 21.2}
+  }
+}
