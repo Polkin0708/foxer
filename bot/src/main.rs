@@ -37,6 +37,23 @@ fn main() -> ExitCode {
             }
         };
     }
+    if args.len() == 5 && args[0] == "prepare-mt5" {
+        return match forex_bot::mt5::prepare_mt5(
+            Path::new(&args[1]),
+            Path::new(&args[2]),
+            args[3].to_str().unwrap_or(""),
+            args[4].to_str().unwrap_or(""),
+        ) {
+            Ok(v) => {
+                println!("{v}");
+                ExitCode::SUCCESS
+            }
+            Err(e) => {
+                eprintln!("{e}");
+                ExitCode::from(1)
+            }
+        };
+    }
     if args.len() == 4 && args[0] == "import-history" {
         return match forex_bot::data::import_history_symbol(
             Path::new(&args[1]),

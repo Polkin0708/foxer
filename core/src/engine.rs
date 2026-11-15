@@ -1,6 +1,15 @@
 use crate::{model::Strategy, trading::*};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
+
+/// Rules that create plans and may be listed in policies.plans.disabled_rules.
+pub const PLAN_RULES: [&str; 5] = [
+    "W_point_A",
+    "D_correction_start",
+    "D_correction_end",
+    "D_continuation_from_weekly_zone",
+    "D_correction_after_weekly_fractal",
+];
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum Timeframe {
     W,
@@ -381,6 +390,25 @@ impl Engine {
     pub fn signals(&self) -> Vec<Signal> {
         self.signals.clone()
     }
+    /// Plan rule enabled unless listed in policies.plans.disabled_rules.
+    fn plan_enabled(c: &Strategy, rule: &str) -> bool {
+        !c.policies.plans.disabled_rules.iter().any(|r| {
+            serde_json::to_value(r)
+                .ok()
+                .is_some_and(|v| v.as_str() == Some(rule))
+        })
+    }
+    fn add_plan_if(
+        &mut self,
+        c: &Strategy,
+        rule: &str,
+        side: Side,
+        tf: Timeframe,
+        poi: Zone,
+        now: i64,
+    ) -> bool {
+        Self::plan_enabled(c, rule) && self.add_plan(rule, side, tf, poi, now)
+    }
     pub fn add_plan(&mut self, rule: &str, side: Side, tf: Timeframe, poi: Zone, now: i64) -> bool {
         let kind = match rule {
             "W_point_A" => "trend",
@@ -510,13 +538,14 @@ impl Engine {
                 {
                     if b.low <= z.high && b.high >= z.low {
                         self.weekly_zone_touch = Some(b.end);
-                        self.add_plan("W_point_A", w, Timeframe::W, z, b.end);
+                        self.add_plan_if(c, "W_point_A", w, Timeframe::W, z, b.end);
                     }
                 }
                 let d = self.trend(Timeframe::D);
                 if delta.previous == Some(w) && d != Some(w) {
                     if let Some(z) = delta.inverted.iter().rev().find(|z| z.side == w) {
-                        self.add_plan(
+                        self.add_plan_if(
+                            c,
                             "D_correction_start",
                             opposite(w),
                             Timeframe::D,
@@ -534,7 +563,7 @@ impl Engine {
                         .cloned()
                         .or_else(|| delta.inverted.iter().rev().find(|z| z.side != w).cloned());
                     if let Some(z) = z {
-                        self.add_plan("D_correction_end", w, Timeframe::D, z, b.end);
+                        self.add_plan_if(c, "D_correction_end", w, Timeframe::D, z, b.end);
                     }
                 }
                 let age = i64::try_from(c.parameters.plan_days.value)
@@ -544,7 +573,8 @@ impl Engine {
                 let recent = |t: Option<i64>| t.is_some_and(|t| b.end >= t && b.end - t <= age);
                 if delta.previous != Some(w) && recent(self.weekly_zone_touch) {
                     if let Some(z) = delta.new.iter().rev().find(|z| z.side == w) {
-                        self.add_plan(
+                        self.add_plan_if(
+                            c,
                             "D_continuation_from_weekly_zone",
                             w,
                             Timeframe::D,
@@ -555,7 +585,8 @@ impl Engine {
                 }
                 if recent(self.weekly_fractal_sweep) {
                     if let Some(z) = delta.new.iter().rev().find(|z| z.side != w) {
-                        self.add_plan(
+                        self.add_plan_if(
+                            c,
                             "D_correction_after_weekly_fractal",
                             opposite(w),
                             Timeframe::D,

@@ -46,6 +46,7 @@ impl Aggregator {
             }
         }
         if let Some(end) = self.minute_end.take() {
+            let end = crate::calendar::after_market_closure(end);
             if t.millis >= end * 1000 {
                 for b in self.open.values_mut() {
                     if b.bar.end > end && t.millis > end * 1000 {
@@ -77,7 +78,9 @@ impl Aggregator {
             let complete = self
                 .open
                 .get(&tf)
-                .map(|o| o.bar.end == start)
+                .map(|o| {
+                    o.bar.end == start || crate::calendar::after_market_closure(o.bar.end) == start
+                })
                 .unwrap_or(t.millis == start * 1000);
             self.open.insert(
                 tf,
@@ -104,13 +107,17 @@ impl Aggregator {
         minute: &crate::prices::Minute,
     ) -> Result<Vec<(Timeframe, Candle)>, String> {
         if minute.gap_before_minutes > 0 {
-            let covered = self.minute_end.unwrap_or(minute.timestamp);
+            let covered =
+                crate::calendar::after_market_closure(self.minute_end.unwrap_or(minute.timestamp));
             for b in self.open.values_mut() {
                 if b.bar.end > covered {
                     b.complete = false;
                 }
             }
         }
+        // Prepared minutes carry their own gap information; the tick-time
+        // continuity check belongs to live quotes.
+        self.minute_end = None;
         let bars = self.push(Tick {
             symbol: symbol.into(),
             source: source.into(),

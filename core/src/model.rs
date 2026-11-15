@@ -284,6 +284,8 @@ pub struct PoliciesPlans {
     pub entry: Vec<PoliciesPlansEntryItem>,
     pub entry_priority: PoliciesPlansEntryPriority,
     pub stop: PoliciesPlansStop,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub disabled_rules: Vec<PoliciesPlansDailyRulesItem>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Deserialize, Serialize)]

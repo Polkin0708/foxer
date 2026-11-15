@@ -104,6 +104,7 @@ pub struct Archive {
 }
 pub struct Dataset {
     pub source: String,
+    pub minute_mode: bool,
     pub roots: Vec<PathBuf>,
     pub gaps: Vec<(i64, i64)>,
     pub archives: Vec<Archive>,
@@ -115,6 +116,7 @@ impl Dataset {
         let mut archives = Vec::new();
         let mut provenance = Vec::new();
         let mut source: Option<String> = None;
+        let mut minute_mode: Option<bool> = None;
         for root in &roots {
             let q = json_file(&root.join("quality-report.json"))?;
             let name = q["source"]
@@ -142,20 +144,29 @@ impl Dataset {
                 }
                 gaps.push((a, b));
             }
+            let minutes = q["origin"] == MT5_ORIGIN;
+            if minute_mode.is_some_and(|m| m != minutes) {
+                return Err("mixed tick and minute history for instrument".into());
+            }
+            minute_mode = Some(minutes);
+            if minutes {
+                for month in q["missing_months"]
+                    .as_array()
+                    .ok_or("missing quality information")?
+                {
+                    let (a, b) = month_bounds(month.as_str().ok_or("invalid month")?)?;
+                    if a < to && b > from {
+                        return Err("requested period overlaps a missing month".into());
+                    }
+                }
+                provenance.push(json!({"root":root,"source":name,"quality_sha256":hash(&root.join("quality-report.json"))?,"intrabar":"synthetic"}));
+                continue;
+            }
             let m = json_file(&root.join("manifest.json"))?;
             provenance.push(json!({"root":root,"source":name,"manifest_sha256":hash(&root.join("manifest.json"))?,"quality_sha256":hash(&root.join("quality-report.json"))?}));
             for f in m["files"].as_array().ok_or("missing manifest files")? {
                 let month = f["month"].as_str().ok_or("missing month")?;
-                let d = NaiveDate::parse_from_str(&format!("{month}-01"), "%Y-%m-%d")
-                    .map_err(|_| "invalid archive month")?;
-                let next = if d.month() == 12 {
-                    NaiveDate::from_ymd_opt(d.year() + 1, 1, 1)
-                } else {
-                    NaiveDate::from_ymd_opt(d.year(), d.month() + 1, 1)
-                }
-                .ok_or("month overflow")?;
-                let start = (d.and_hms_opt(0, 0, 0).unwrap().and_utc().timestamp()) * 1000;
-                let end = (next.and_hms_opt(0, 0, 0).unwrap().and_utc().timestamp()) * 1000;
+                let (start, end) = month_bounds(month)?;
                 if start < to && end > from {
                     let rel = Path::new(f["file"].as_str().ok_or("missing archive path")?);
                     if rel.is_absolute()
@@ -174,8 +185,9 @@ impl Dataset {
                 }
             }
         }
+        let minute_mode = minute_mode.unwrap_or(false);
         archives.sort_by_key(|a| a.start);
-        let mut covered = from;
+        let mut covered = if minute_mode { to } else { from };
         for a in &archives {
             if a.start > covered {
                 return Err("missing index history in requested period".into());
@@ -192,19 +204,14 @@ impl Dataset {
         gaps.dedup();
         Ok(Self {
             source: source.ok_or("missing history source")?,
+            minute_mode,
             roots,
             gaps,
             archives,
             provenance,
         })
     }
-    pub fn prepare(
-        &mut self,
-        symbol: &str,
-        from: i64,
-        cfg: &Strategy,
-    ) -> Result<(Engine, Aggregator, Value), String> {
-        let cutoff = from / 1000;
+    pub fn prepared_files(&self, symbol: &str) -> Result<Vec<(PathBuf, Value)>, String> {
         let mut files = Vec::new();
         for root in &self.roots {
             let q = json_file(&root.join("quality-report.json"))?;
@@ -218,6 +225,16 @@ impl Dataset {
             }
         }
         files.sort_by(|a, b| a.0.file_name().cmp(&b.0.file_name()));
+        Ok(files)
+    }
+    pub fn prepare(
+        &mut self,
+        symbol: &str,
+        from: i64,
+        cfg: &Strategy,
+    ) -> Result<(Engine, Aggregator, Value), String> {
+        let cutoff = from / 1000;
+        let files = self.prepared_files(symbol)?;
         let mut agg = Aggregator::default();
         let mut previous = None;
         let mut gap_idx = 0;
@@ -293,4 +310,126 @@ impl Dataset {
         }
         Ok((engine, agg, json!(counts)))
     }
+}
+
+/// quality-report.json origin of MT5 M1 bar exports (minute backtest mode).
+pub const MT5_ORIGIN: &str = "mt5_m1_bars";
+/// UTC month bounds in epoch milliseconds.
+fn month_bounds(month: &str) -> Result<(i64, i64), String> {
+    let d = NaiveDate::parse_from_str(&format!("{month}-01"), "%Y-%m-%d")
+        .map_err(|_| "invalid archive month")?;
+    let next = if d.month() == 12 {
+        NaiveDate::from_ymd_opt(d.year() + 1, 1, 1)
+    } else {
+        NaiveDate::from_ymd_opt(d.year(), d.month() + 1, 1)
+    }
+    .ok_or("month overflow")?;
+    let at = |d: NaiveDate| d.and_hms_opt(0, 0, 0).unwrap().and_utc().timestamp() * 1000;
+    Ok((at(d), at(next)))
+}
+/// Streams verified prepared minutes whose start lies in [from, to) milliseconds.
+pub fn read_minutes(
+    files: &[(PathBuf, Value)],
+    from: i64,
+    to: i64,
+    mut visit: impl FnMut(prices::Minute) -> Result<(), String>,
+) -> Result<(), String> {
+    let mut previous = None;
+    for (path, meta) in files {
+        verify(
+            path,
+            meta["sha256"].as_str().ok_or("missing prepared hash")?,
+        )?;
+        let mut reader = csv::Reader::from_path(path).map_err(|e| e.to_string())?;
+        let headers = reader.headers().map_err(|e| e.to_string())?.clone();
+        for row in reader.records() {
+            let m = prices::parse_record(&headers, &row.map_err(|e| e.to_string())?)?;
+            if previous.is_some_and(|p| p >= m.timestamp) {
+                return Err("unordered or overlapping prepared minutes".into());
+            }
+            previous = Some(m.timestamp);
+            let ms = m.timestamp * 1000;
+            if ms >= to {
+                return Ok(());
+            }
+            if ms >= from {
+                visit(m)?;
+            }
+        }
+    }
+    Ok(())
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Order {
+    LowFirst,
+    HighFirst,
+}
+/// Worst-case order of the minute extremes for open signals of `symbol`;
+/// the flag reports signals that required opposite orders.
+pub fn intrabar_order(m: &prices::Minute, trades: &[Value], symbol: &str) -> (Order, bool) {
+    let (high, low) = (m.price[1], m.price[2]);
+    let (mut lows, mut highs) = (0u32, 0u32);
+    for t in trades.iter().filter(|t| t["symbol"] == symbol) {
+        let level = |k: &str| t[k].as_i64();
+        let (Some(entry), Some(stop), Some(tp)) =
+            (level("entry"), level("stop"), level("take_profit"))
+        else {
+            continue;
+        };
+        let long = t["side"] == "Long";
+        let preference = match (t["state"].as_str(), long) {
+            (Some("Active"), true) => (stop >= low).then_some(Order::LowFirst),
+            (Some("Active"), false) => (stop <= high).then_some(Order::HighFirst),
+            (Some("Pending"), true) if entry >= low => {
+                if stop >= low {
+                    Some(Order::LowFirst)
+                } else {
+                    (tp <= high).then_some(Order::HighFirst)
+                }
+            }
+            (Some("Pending"), false) if entry <= high => {
+                if stop <= high {
+                    Some(Order::HighFirst)
+                } else {
+                    (tp >= low).then_some(Order::LowFirst)
+                }
+            }
+            _ => None,
+        };
+        match preference {
+            Some(Order::LowFirst) => lows += 1,
+            Some(Order::HighFirst) => highs += 1,
+            None => {}
+        }
+    }
+    let conflict = lows > 0 && highs > 0;
+    let order = if lows == 0 && highs == 0 {
+        if m.price[3] >= m.price[0] {
+            Order::LowFirst
+        } else {
+            Order::HighFirst
+        }
+    } else if highs > lows {
+        Order::HighFirst
+    } else {
+        Order::LowFirst
+    };
+    (order, conflict)
+}
+/// Four index quotes per minute: open, extremes in `order`, close.
+pub fn synthetic_ticks(m: &prices::Minute, symbol: &str, source: &str, order: Order) -> Vec<Tick> {
+    let [o, h, l, c] = m.price;
+    let (x, y) = match order {
+        Order::LowFirst => (l, h),
+        Order::HighFirst => (h, l),
+    };
+    [(0, o), (20_000, x), (40_000, y), (59_000, c)]
+        .into_iter()
+        .map(|(offset, price)| Tick {
+            symbol: symbol.into(),
+            source: source.into(),
+            millis: m.timestamp * 1000 + offset,
+            price,
+        })
+        .collect()
 }

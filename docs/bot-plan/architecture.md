@@ -195,6 +195,7 @@ Shell-интерполяция запрещена; неизвестные и п�
 |---|---|
 | `run <env-file>` | Запуск координатора и внешних адаптеров |
 | `check-service <env-file>` | Проверка настроек и стратегии без сети |
+| `prepare-mt5 <csv> <root> <symbol> <source>` | Подготовка индексных минут из выгрузки баров MT5 |
 | `import-history <db> <root>` | Проверенный импорт подготовленных минут |
 | `inspect-db <db> <as-of-UTC>` | Просмотр сохранённых минут и закрытых свечей |
 | `smoke-test <db> <strategy>` | Автономный искусственный сценарий на новой тестовой БД |
@@ -354,6 +355,7 @@ OpenAI получает документ с пояснениями и катал
 | `trend_system.weekly_rules[].{message,action}` | `messages.<ID>`; текст сохранён, поведение перехода задаёт ID |
 | `trend_system.daily_rules.precondition` | `policies.plans.daily_requires_weekly_trend`, `daily_poi` и `context.minimum_bars` |
 | `trend_system.daily_rules.rules[].id` | `policies.plans.daily_rules[]` |
+| — | `policies.plans.disabled_rules[]` — необязательный список правил, которые не создают планы: `W_point_A`, `D_correction_start`, `D_correction_end`, `D_continuation_from_weekly_zone`, `D_correction_after_weekly_fractal`. По умолчанию пуст. Побочные эффекты правила (wzone, wfrac, тренд) сохраняются |
 | `trend_system.daily_rules.rules[].{when,action,plan.*,status,target,meaning,note,side_effect}` | Фиксированная семантика соответствующего ID; POI — `policies.plans.{daily_poi,weekly_poi}`, цели — policies.targets, отключение — policies.modules |
 | `W_fractal_swept.when` (число недель) | `parameters.weekly_fractal_sweep_lookback_bars.value` |
 | `D_correction_start.extra` | Удалено: отметка дневного фрактала за 30 баров не реализована |
@@ -524,7 +526,12 @@ status и errorCode ордера. Все шесть статусов ордер�
 
 Подготовленные индексные минуты должны непрерывно покрывать публикуемую свечу.
 Пропуск между минутами или gap_before_minutes прерывает полноту открытых свечей;
-недостающий конец интервала не заменяется последней ценой.
+недостающий конец интервала не заменяется последней ценой. Для подготовленных
+минут источник сведений о пропуске — поле gap_before_minutes (и gaps набора);
+проверка по времени предыдущей котировки применяется к живым тикам.
+Закрытие рынка с пятницы 16:00 до воскресенья 17:00 America/New_York пропуском не
+считается: последняя пятничная свеча закрывается полной, первая свеча новой недели
+(W и D) продолжает полноту от неё, даже если первая котировка пришла позже 17:00.
 
 Адаптер переводит исходный fp9 в масштаб 1e6 целочисленным округлением к ближайшему,
 половины вверх. Результат записывается в Tick.price; нулевая цена отклоняется.
