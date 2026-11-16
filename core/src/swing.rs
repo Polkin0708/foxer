@@ -23,6 +23,42 @@ pub enum TakeProfit {
     Fixed,
     Target,
 }
+/// Range trading parameters (requirements: Торговля в боковике).
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct RangeConfig {
+    pub enabled: bool,
+    pub min_h4_bars: usize,
+    pub window_min: usize,
+    pub window_max: usize,
+    pub height_min_atr_d: f64,
+    pub height_max_atr_d: f64,
+    pub impulse_bars: usize,
+    pub impulse_min_atr_d: f64,
+    pub impulse_min_ratio: f64,
+    pub break_fraction: f64,
+    /// Minimal wick beyond a border, in price units.
+    pub wick_min: f64,
+    pub max_stops_per_border: u32,
+}
+impl Default for RangeConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            min_h4_bars: 32,
+            window_min: 12,
+            window_max: 60,
+            height_min_atr_d: 0.4,
+            height_max_atr_d: 1.5,
+            impulse_bars: 12,
+            impulse_min_atr_d: 1.5,
+            impulse_min_ratio: 1.2,
+            break_fraction: 0.5,
+            wick_min: 0.001,
+            max_stops_per_border: 2,
+        }
+    }
+}
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct SwingConfig {
@@ -41,6 +77,7 @@ pub struct SwingConfig {
     pub cost: f64,
     /// Bars before this time only build context.
     pub start: i64,
+    pub range: RangeConfig,
 }
 impl Default for SwingConfig {
     fn default() -> Self {
@@ -56,6 +93,7 @@ impl Default for SwingConfig {
             entry_close_hours: vec![0, 8, 12, 16, 20],
             cost: 0.0,
             start: 0,
+            range: RangeConfig::default(),
         }
     }
 }
@@ -257,6 +295,18 @@ impl Frame {
 pub enum Kind {
     Trend,
     Correction,
+    Range,
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct RangeBox {
+    id: u64,
+    top: f64,
+    bot: f64,
+    /// Stops taken from the bottom (index 0, longs) and the top (index 1, shorts).
+    stops: [u32; 2],
+}
+fn border(dir: i8) -> usize {
+    usize::from(dir < 0)
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 enum PlanState {
@@ -297,7 +347,8 @@ pub struct Trade {
     pub state: TradeState,
     pub r: Option<f64>,
     pub exit_t: Option<i64>,
-    plan: usize,
+    plan: Option<usize>,
+    range_box: Option<u64>,
 }
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Sizing {
@@ -354,6 +405,9 @@ pub struct Swing {
     plans: Vec<Plan>,
     trades: Vec<Trade>,
     d_count: usize,
+    rbox: Option<RangeBox>,
+    boxes: u64,
+    last_impulse: Option<i64>,
 }
 impl Swing {
     pub fn new(cfg: SwingConfig) -> Self {
@@ -366,10 +420,17 @@ impl Swing {
             plans: vec![],
             trades: vec![],
             d_count: 0,
+            rbox: None,
+            boxes: 0,
+            last_impulse: None,
         }
     }
     pub fn trades(&self) -> &[Trade] {
         &self.trades
+    }
+    /// Current range borders (top, bottom).
+    pub fn range_box(&self) -> Option<(f64, f64)> {
+        self.rbox.as_ref().map(|b| (b.top, b.bot))
     }
     pub fn frame(&self, tf: Tf) -> &Frame {
         match tf {
@@ -438,6 +499,9 @@ impl Swing {
         }
         if tf == Tf::W {
             self.weekly_plans(&b);
+        }
+        if tf == Tf::H4 && self.cfg.range.enabled && self.h4.len() > self.cfg.range.min_h4_bars {
+            self.range_step(&b);
         }
         for k in 0..self.plans.len() {
             self.advance(k, tf, &b);
@@ -523,11 +587,7 @@ impl Swing {
         else {
             return;
         };
-        if !self
-            .cfg
-            .entry_close_hours
-            .contains(&(b.end.rem_euclid(86_400) / 3600))
-        {
+        if !self.entry_hour(b.end) {
             return;
         }
         let d = f64::from(p.dir);
@@ -565,9 +625,159 @@ impl Swing {
             },
             r: None,
             exit_t: None,
-            plan: k,
+            plan: Some(k),
+            range_box: None,
         });
         self.plans[k].state = PlanState::Active;
+    }
+    fn entry_hour(&self, end: i64) -> bool {
+        self.cfg
+            .entry_close_hours
+            .contains(&(end.rem_euclid(86_400) / 3600))
+    }
+    fn estimate_box(&mut self) -> Option<RangeBox> {
+        let rc = &self.cfg.range;
+        let a = self.d.atr().filter(|a| *a > 0.0)?;
+        let (h, l, n) = (&self.h4.high, &self.h4.low, self.h4.len());
+        let mut best: Option<(usize, f64, f64)> = None;
+        for k in rc.window_min..=rc.window_max.min(n - 1) {
+            let (from, to) = (n - k - 1, n - 1);
+            let top = h[from..to].iter().fold(f64::NEG_INFINITY, |m, v| m.max(*v));
+            let bot = l[from..to].iter().fold(f64::INFINITY, |m, v| m.min(*v));
+            if top - bot > rc.height_max_atr_d * a {
+                break;
+            }
+            if top - bot >= rc.height_min_atr_d * a {
+                best = Some((k, top, bot));
+            }
+        }
+        let (k, top, bot) = best?;
+        if n - k - 1 < rc.impulse_bars {
+            return None;
+        }
+        let (from, to) = (n - k - 1 - rc.impulse_bars, n - k - 1);
+        let travel = h[from..to].iter().fold(f64::NEG_INFINITY, |m, v| m.max(*v))
+            - l[from..to].iter().fold(f64::INFINITY, |m, v| m.min(*v));
+        if travel < rc.impulse_min_atr_d * a || travel < rc.impulse_min_ratio * (top - bot) {
+            return None;
+        }
+        let impulse = (n - k - rc.impulse_bars) as i64;
+        if self
+            .last_impulse
+            .is_some_and(|last| impulse <= last + rc.impulse_bars as i64)
+        {
+            return None;
+        }
+        self.last_impulse = Some(impulse);
+        self.boxes += 1;
+        Some(RangeBox {
+            id: self.boxes,
+            top,
+            bot,
+            stops: [0, 0],
+        })
+    }
+    fn range_step(&mut self, b: &Bar) {
+        match &self.rbox {
+            None => self.rbox = self.estimate_box(),
+            Some(r) => {
+                let height = r.top - r.bot;
+                let f = self.cfg.range.break_fraction;
+                if b.close > r.top + f * height || b.close < r.bot - f * height {
+                    self.rbox = None;
+                }
+            }
+        }
+        let Some(r) = self.rbox.clone() else { return };
+        if self.trades.iter().any(|t| {
+            t.kind == Kind::Range && matches!(t.state, TradeState::Pending | TradeState::Active)
+        }) {
+            return;
+        }
+        let n = self.h4.len();
+        let (prev_close, prev_high, prev_low) = (
+            self.h4.close[n - 2],
+            self.h4.high[n - 2],
+            self.h4.low[n - 2],
+        );
+        let a4 = self.h4.atr().unwrap_or(0.0);
+        let rc = &self.cfg.range;
+        for (dir, edge, extreme) in [(-1i8, r.top, b.high), (1i8, r.bot, b.low)] {
+            let d = f64::from(dir);
+            let deviation = if dir < 0 {
+                extreme > edge
+            } else {
+                extreme < edge
+            };
+            let inside = r.bot <= b.close && b.close <= r.top;
+            let prev_out = if dir < 0 {
+                prev_close > r.top
+            } else {
+                prev_close < r.bot
+            };
+            let wick = (extreme - edge).abs() >= rc.wick_min;
+            if !inside || r.stops[border(dir)] >= rc.max_stops_per_border {
+                continue;
+            }
+            if !((deviation && wick) || prev_out) || !self.entry_hour(b.end) {
+                continue;
+            }
+            let dev_ext = if dir < 0 {
+                extreme.max(prev_high)
+            } else {
+                extreme.min(prev_low)
+            };
+            let stop = if dir < 0 {
+                dev_ext + self.cfg.stop_buffer_atr * a4
+            } else {
+                dev_ext - self.cfg.stop_buffer_atr * a4
+            };
+            let target = if dir < 0 { r.bot } else { r.top };
+            let mut entry = b.close;
+            let mut risk = (entry - stop) * d;
+            if risk <= 0.0 {
+                continue;
+            }
+            let rr_target = (target - entry) * d / risk;
+            let rr_fixed = self.cfg.rr_fixed;
+            let limit = rr_target < rr_fixed;
+            if limit {
+                entry = (target + rr_fixed * stop) / (1.0 + rr_fixed);
+                risk = (entry - stop) * d;
+                if risk <= 0.0 || !(r.bot <= entry && entry <= r.top) {
+                    continue;
+                }
+            }
+            let tp = if (target - entry).abs() > rr_fixed * risk {
+                entry + rr_fixed * risk * d
+            } else {
+                target
+            };
+            self.trades.push(Trade {
+                kind: Kind::Range,
+                dir,
+                entry: if limit {
+                    entry
+                } else {
+                    entry + d * self.cfg.cost
+                },
+                stop,
+                tp,
+                rr: if limit { rr_fixed } else { rr_target },
+                signal_t: b.end,
+                fill_t: (!limit).then_some(b.end),
+                state: if limit {
+                    TradeState::Pending
+                } else {
+                    TradeState::Active
+                },
+                r: None,
+                exit_t: None,
+                plan: None,
+                range_box: Some(r.id),
+            });
+            break;
+        }
     }
     /// One minute of quotes: `high` and `low` of the minute starting at `t`.
     pub fn minute(&mut self, t: i64, high: f64, low: f64) {
@@ -579,9 +789,14 @@ impl Swing {
             let long = tr.dir > 0;
             if tr.state == TradeState::Pending {
                 let target_first = if long { high >= tr.tp } else { low <= tr.tp };
-                if self.plans[tr.plan].state == PlanState::Done || target_first {
+                let plan_done = tr
+                    .plan
+                    .is_some_and(|k| self.plans[k].state == PlanState::Done);
+                if plan_done || target_first {
                     tr.state = TradeState::Cancelled;
-                    self.plans[tr.plan].state = PlanState::Done;
+                    if let Some(k) = tr.plan {
+                        self.plans[k].state = PlanState::Done;
+                    }
                     continue;
                 }
                 if if long {
@@ -612,7 +827,17 @@ impl Swing {
                 continue;
             }
             tr.exit_t = Some(t);
-            self.plans[tr.plan].state = PlanState::Done;
+            if let Some(k) = tr.plan {
+                self.plans[k].state = PlanState::Done;
+            }
+            if tr.kind == Kind::Range {
+                if tr.state == TradeState::Stop {
+                    if let Some(b) = self.rbox.as_mut().filter(|b| Some(b.id) == tr.range_box) {
+                        b.stops[border(tr.dir)] += 1;
+                    }
+                }
+                self.rbox = None;
+            }
         }
     }
 }

@@ -123,6 +123,7 @@ pub fn run(csv: &Path, config: &Path, output: &Path) -> Result<(), String> {
             match t.kind {
                 Kind::Trend => "trend",
                 Kind::Correction => "correction",
+                Kind::Range => "range",
             },
             t.dir,
             stamp(t.signal_t),
