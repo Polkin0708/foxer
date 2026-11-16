@@ -6,6 +6,7 @@ pub mod feed;
 pub mod model;
 pub mod prices;
 pub mod processing;
+pub mod swing;
 pub mod trading;
 use model::Strategy;
 use serde_json::{json, Value};

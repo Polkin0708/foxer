@@ -11,8 +11,15 @@ fn execute() -> Result<(), String> {
     if args.len() == 2 && args[0] == "--report-only" {
         return runner::report(std::path::Path::new(&args[1]));
     }
+    if args.len() == 4 && args[0] == "swing-replay" {
+        return forex_backtest::swing_replay::run(
+            std::path::Path::new(&args[1]),
+            std::path::Path::new(&args[2]),
+            std::path::Path::new(&args[3]),
+        );
+    }
     if args == ["--help"] {
-        println!("forex-backtest --strategy FILE --data-config FILE --from UTC --to UTC [--symbols A,B] --output NEW_DIR [--no-pdf]\nforex-backtest --report-only RESULT_DIR");
+        println!("forex-backtest --strategy FILE --data-config FILE --from UTC --to UTC [--symbols A,B] --output NEW_DIR [--no-pdf]\nforex-backtest --report-only RESULT_DIR\nforex-backtest swing-replay MT5_M1.csv SWING_CONFIG.json NEW_TRADES.csv");
         return Ok(());
     }
     let mut values = std::collections::BTreeMap::new();
