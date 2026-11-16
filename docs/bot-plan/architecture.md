@@ -339,6 +339,7 @@ OpenAI получает документ с пояснениями и катал
 | `instruments[].range_trading`, `range_system.enabled` | Единый `policies.modules.range_trading=false` |
 | `candles.*`, `context.*` | Те же пути и значения; необязательный comment у объектов |
 | `trade_window.*` | `policies.trade_window.*` |
+| — | `policies.trade_window.entry_h4_close_hours[]` — необязательный список часов закрытия H4 (America/New_York, подмножество `candles.h4_close_hours`, без повторов). Обязателен и непуст при `session_filter=true`, пуст или отсутствует при `false`. На закрытии H4 вне списка движок не выбирает входную зону; планы в ожидании подтверждения и уже опубликованные сигналы обрабатываются как обычно |
 | `definitions.atr` | `policies.atr.method=mean_high_low`; описание параметра `atr_period.comment` |
 | `definitions.fvg.*` | `policies.zones.fvg=three_candle_gap`; размер — `parameters.min_fvg_atr` |
 | `definitions.gap.*` | `policies.zones.gap=previous_close_to_next_open` и пояснение группы zones |

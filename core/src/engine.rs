@@ -632,6 +632,12 @@ impl Engine {
                     .get(frame.bars.len().saturating_sub(n))
                     .map(|b| b.end)
                     .unwrap_or(b.end);
+                // Entry-time filter: outside the listed close hours no entry zone is selected.
+                let window = &c.policies.trade_window;
+                let entry_allowed = !window.session_filter
+                    || window
+                        .entry_h4_close_hours
+                        .contains(&crate::calendar::close_hour(b.end)?);
                 for p in &mut self.plans {
                     if p.state == PlanState::WaitConfirm
                         && (delta.new.iter().any(|z| z.side == p.side)
@@ -642,7 +648,7 @@ impl Engine {
                     {
                         p.state = PlanState::WaitEntry;
                     }
-                    if p.state != PlanState::WaitEntry {
+                    if p.state != PlanState::WaitEntry || !entry_allowed {
                         continue;
                     }
                     let start = if p.rule == "D_correction_start" {

@@ -55,6 +55,15 @@ pub fn entry_window(started: i64, policy: &str) -> Result<i64, String> {
     }
 }
 
+/// Wall-clock hour (America/New_York) of a candle close.
+pub fn close_hour(end: i64) -> Result<u64, String> {
+    let utc = Utc
+        .timestamp_opt(end, 0)
+        .single()
+        .ok_or("invalid calendar time")?;
+    Ok(u64::from(utc.with_timezone(&New_York).hour()))
+}
+
 /// Quote time expected after `end`: if `end` falls inside the weekly market
 /// closure (Friday from 16:00 to Sunday 17:00 America/New_York), the next
 /// Sunday 17:00; otherwise `end` itself.

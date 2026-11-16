@@ -115,7 +115,6 @@ pub fn validate(c: &Strategy) -> Result<(), String> {
             "/policies/risk/queue_order",
             json!(["signal_time", "rr_desc", "instrument_order"]),
         ),
-        ("/policies/trade_window/session_filter", json!(false)),
         (
             "/policies/targets/weekly_poi_daily_alternative/enabled",
             json!(true),
@@ -143,6 +142,16 @@ pub fn validate(c: &Strategy) -> Result<(), String> {
         if a.len() != len || a.iter().any(|s| !seen.insert(s.to_string())) {
             return Err(format!("rule: missing or duplicate policy: {path}"));
         }
+    }
+    let window = &c.policies.trade_window;
+    let mut hours = HashSet::new();
+    if window.session_filter == window.entry_h4_close_hours.is_empty()
+        || window
+            .entry_h4_close_hours
+            .iter()
+            .any(|h| !c.candles.h4_close_hours.contains(h) || !hours.insert(*h))
+    {
+        return Err("rule: inconsistent trade window filter and entry hours".into());
     }
     let mut disabled = HashSet::new();
     for r in &c.policies.plans.disabled_rules {

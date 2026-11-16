@@ -443,6 +443,9 @@ pub enum PoliciesTradeWindowMode {
 pub struct PoliciesTradeWindow {
     pub mode: PoliciesTradeWindowMode,
     pub session_filter: bool,
+    /// H4 close hours (America/New_York) at which an entry zone may be selected.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub entry_h4_close_hours: Vec<u64>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Deserialize, Serialize)]
