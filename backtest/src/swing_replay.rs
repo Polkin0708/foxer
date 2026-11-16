@@ -1,7 +1,7 @@
 //! Replays MetaTrader 5 M1 bars through the swing rule set and writes the trade list.
 //! Used to reconcile the Rust rules with the reference prototype, not to tune parameters.
 use chrono::NaiveDateTime;
-use forex_core::swing::{Bar, Kind, Swing, SwingConfig, Tf, TradeState};
+use forex_core::swing::{dollar_index, Bar, Event, Kind, Ohlc, Swing, SwingConfig, Tf, TradeState};
 use std::io::{BufRead, Write};
 use std::path::Path;
 
@@ -79,30 +79,137 @@ impl Bars {
         closed
     }
 }
-fn stamp(t: i64) -> String {
-    chrono::DateTime::from_timestamp(t, 0)
-        .map(|d| d.format("%Y-%m-%d %H:%M:%S").to_string())
-        .unwrap_or_default()
-}
-pub fn run(csv: &Path, config: &Path, output: &Path) -> Result<(), String> {
-    if output.exists() {
-        return Err("output already exists".into());
+/// Synthetic dollar index from six minute series (EURUSD, USDJPY, GBPUSD, USDCAD,
+/// USDSEK, USDCHF), each sorted by time. Only minutes present in all six are kept.
+pub fn build_dollar_index(pairs: &[Vec<Minute>]) -> Vec<Minute> {
+    assert_eq!(pairs.len(), 6, "six pairs");
+    let mut at = [0usize; 6];
+    let mut out = vec![];
+    while (0..6).all(|k| at[k] < pairs[k].len()) {
+        let t = (0..6)
+            .map(|k| pairs[k][at[k]].time)
+            .max()
+            .unwrap_or_default();
+        if (0..6).all(|k| pairs[k][at[k]].time == t) {
+            let ohlc = std::array::from_fn(|k| {
+                let m = pairs[k][at[k]];
+                Ohlc {
+                    open: m.open,
+                    high: m.high,
+                    low: m.low,
+                    close: m.close,
+                }
+            });
+            let x = dollar_index(&ohlc);
+            out.push(Minute {
+                time: t,
+                open: x.open,
+                high: x.high,
+                low: x.low,
+                close: x.close,
+            });
+            for a in &mut at {
+                *a += 1;
+            }
+        } else {
+            for k in 0..6 {
+                if pairs[k][at[k]].time < t {
+                    at[k] += 1;
+                }
+            }
+        }
     }
-    let cfg: SwingConfig =
-        serde_json::from_slice(&std::fs::read(config).map_err(|_| "cannot read swing config")?)
-            .map_err(|e| format!("invalid swing config: {e}"))?;
-    let mut swing = Swing::new(cfg);
-    let mut bars = Bars::default();
+    out
+}
+fn read_minutes(csv: &Path) -> Result<Vec<Minute>, String> {
     let file = std::fs::File::open(csv).map_err(|_| "cannot read MT5 export")?;
+    let mut out = vec![];
     for (n, line) in std::io::BufReader::new(file).lines().enumerate() {
         let line = line.map_err(|_| "cannot read MT5 export")?;
         if n == 0 && line.starts_with('<') {
             continue;
         }
-        let m = parse_row(line.trim_end()).map_err(|e| format!("line {}: {e}", n + 1))?;
+        out.push(parse_row(line.trim_end()).map_err(|e| format!("line {}: {e}", n + 1))?);
+    }
+    Ok(out)
+}
+fn mt5_row(m: &Minute) -> String {
+    let d = chrono::DateTime::from_timestamp(m.time, 0).unwrap_or_default();
+    format!(
+        "{}\t{}\t{:?}\t{:?}\t{:?}\t{:?}\t0\t0\t0",
+        d.format("%Y.%m.%d"),
+        d.format("%H:%M:%S"),
+        m.open,
+        m.high,
+        m.low,
+        m.close
+    )
+}
+/// Writes the synthetic dollar index of six MT5 exports as an MT5-style export.
+pub fn build(inputs: &[&Path], output: &Path) -> Result<(), String> {
+    if output.exists() {
+        return Err("output already exists".into());
+    }
+    let pairs = inputs
+        .iter()
+        .map(|p| read_minutes(p))
+        .collect::<Result<Vec<_>, _>>()?;
+    let index = build_dollar_index(&pairs);
+    let mut out =
+        std::io::BufWriter::new(std::fs::File::create(output).map_err(|_| "cannot create output")?);
+    for m in &index {
+        writeln!(out, "{}", mt5_row(m)).map_err(|_| "cannot write output")?;
+    }
+    println!("{}", serde_json::json!({"minutes": index.len()}));
+    Ok(())
+}
+fn load_config(path: &Path) -> Result<SwingConfig, String> {
+    serde_json::from_slice(&std::fs::read(path).map_err(|_| "cannot read swing config")?)
+        .map_err(|e| format!("invalid swing config: {e}"))
+}
+/// Runs the rule set over an index export and returns its events sorted by time.
+fn index_events(csv: &Path, config: &Path) -> Result<Vec<(i64, Event, i8)>, String> {
+    let mut swing = Swing::new(load_config(config)?);
+    let mut bars = Bars::default();
+    for m in read_minutes(csv)? {
         for (tf, bar) in bars.push(&m) {
             swing.close(tf, bar, m.time);
         }
+        swing.minute(m.time, m.high, m.low);
+    }
+    let mut events = swing.events().to_vec();
+    events.sort();
+    Ok(events)
+}
+fn stamp(t: i64) -> String {
+    chrono::DateTime::from_timestamp(t, 0)
+        .map(|d| d.format("%Y-%m-%d %H:%M:%S").to_string())
+        .unwrap_or_default()
+}
+pub fn run(
+    csv: &Path,
+    config: &Path,
+    output: &Path,
+    index: Option<(&Path, &Path)>,
+) -> Result<(), String> {
+    if output.exists() {
+        return Err("output already exists".into());
+    }
+    let events = match index {
+        Some((csv, config)) => index_events(csv, config)?,
+        None => vec![],
+    };
+    let mut swing = Swing::new(load_config(config)?);
+    let mut bars = Bars::default();
+    let mut known = 0;
+    for m in read_minutes(csv)? {
+        for (tf, bar) in bars.push(&m) {
+            swing.close(tf, bar, m.time);
+        }
+        while known < events.len() && events[known].0 <= m.time {
+            known += 1;
+        }
+        swing.reference_minute(m.time, m.close, &events[..known]);
         swing.minute(m.time, m.high, m.low);
     }
     let mut out = std::fs::File::create(output).map_err(|_| "cannot create output")?;
@@ -138,6 +245,7 @@ pub fn run(csv: &Path, config: &Path, output: &Path) -> Result<(), String> {
                 TradeState::Stop => "sl",
                 TradeState::Target => "tp",
                 TradeState::Cancelled => "cancelled",
+                TradeState::ReferenceExit => "dxy_close",
             },
             t.r.map(|r| format!("{r:?}")).unwrap_or_default(),
             t.exit_t.map(stamp).unwrap_or_default(),

@@ -17,6 +17,55 @@ pub struct Bar {
     pub low: f64,
     pub close: f64,
 }
+/// One minute of an instrument without its time.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Ohlc {
+    pub open: f64,
+    pub high: f64,
+    pub low: f64,
+    pub close: f64,
+}
+/// ICE dollar index weights in the order EURUSD, USDJPY, GBPUSD, USDCAD, USDSEK, USDCHF.
+pub const DOLLAR_INDEX_WEIGHTS: [f64; 6] = [-0.576, 0.136, -0.119, 0.091, 0.042, 0.036];
+pub const DOLLAR_INDEX_CONSTANT: f64 = 50.14348112;
+/// Synthetic dollar index for one minute of the six pairs (order of DOLLAR_INDEX_WEIGHTS).
+pub fn dollar_index(pairs: &[Ohlc; 6]) -> Ohlc {
+    let base = DOLLAR_INDEX_CONSTANT.ln();
+    let (mut o, mut c, mut h, mut l) = (base, base, base, base);
+    for (p, w) in pairs.iter().zip(DOLLAR_INDEX_WEIGHTS) {
+        o += w * p.open.ln();
+        c += w * p.close.ln();
+        let (up, down) = if w > 0.0 {
+            (p.high, p.low)
+        } else {
+            (p.low, p.high)
+        };
+        h += w * up.ln();
+        l += w * down.ln();
+    }
+    let (open, close) = (o.exp(), c.exp());
+    Ohlc {
+        open,
+        high: h.exp().max(open.max(close)),
+        low: l.exp().min(open.min(close)),
+        close,
+    }
+}
+/// Event recorded by a rule set; the exit by the index reads them from the index run.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub enum Event {
+    Confirm,
+    Sweep,
+    Target,
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ReferenceExit {
+    /// Index direction matching a trade direction (-1 for EURUSD).
+    pub sign: i8,
+    /// Number of the latest known index events that are examined.
+    pub recent_events: usize,
+}
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TakeProfit {
@@ -78,6 +127,7 @@ pub struct SwingConfig {
     /// Bars before this time only build context.
     pub start: i64,
     pub range: RangeConfig,
+    pub reference_exit: Option<ReferenceExit>,
 }
 impl Default for SwingConfig {
     fn default() -> Self {
@@ -94,6 +144,7 @@ impl Default for SwingConfig {
             cost: 0.0,
             start: 0,
             range: RangeConfig::default(),
+            reference_exit: None,
         }
     }
 }
@@ -325,6 +376,8 @@ struct Plan {
     state: PlanState,
     created_day: usize,
     h4_idx: usize,
+    #[serde(default)]
+    target_hit: bool,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum TradeState {
@@ -333,6 +386,7 @@ pub enum TradeState {
     Stop,
     Target,
     Cancelled,
+    ReferenceExit,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Trade {
@@ -408,6 +462,7 @@ pub struct Swing {
     rbox: Option<RangeBox>,
     boxes: u64,
     last_impulse: Option<i64>,
+    events: Vec<(i64, Event, i8)>,
 }
 impl Swing {
     pub fn new(cfg: SwingConfig) -> Self {
@@ -423,10 +478,15 @@ impl Swing {
             rbox: None,
             boxes: 0,
             last_impulse: None,
+            events: vec![],
         }
     }
     pub fn trades(&self) -> &[Trade] {
         &self.trades
+    }
+    /// Events recorded so far: (time, event, direction).
+    pub fn events(&self) -> &[(i64, Event, i8)] {
+        &self.events
     }
     /// Current range borders (top, bottom).
     pub fn range_box(&self) -> Option<(f64, f64)> {
@@ -481,6 +541,7 @@ impl Swing {
             state: PlanState::WaitConfirm,
             created_day: self.d_count,
             h4_idx: self.h4.len(),
+            target_hit: false,
         });
         true
     }
@@ -570,6 +631,7 @@ impl Swing {
             }) {
                 self.plans[k].state = PlanState::WaitEntry;
                 self.plans[k].h4_idx = self.h4.len() - usize::from(tf == Tf::H4);
+                self.events.push((b.end, Event::Confirm, p.dir));
             }
         }
         if self.plans[k].state != PlanState::WaitEntry || tf != Tf::H4 {
@@ -629,6 +691,39 @@ impl Swing {
             range_box: None,
         });
         self.plans[k].state = PlanState::Active;
+    }
+    /// Exit by the index: `known` are the index events with time not after `t`, in order.
+    pub fn reference_minute(&mut self, t: i64, close: f64, known: &[(i64, Event, i8)]) {
+        let Some(rx) = &self.cfg.reference_exit else {
+            return;
+        };
+        if t < self.cfg.start {
+            return;
+        }
+        let recent = &known[known.len().saturating_sub(rx.recent_events)..];
+        let sign = rx.sign;
+        for tr in &mut self.trades {
+            if tr.state != TradeState::Active {
+                continue;
+            }
+            let filled = tr.fill_t.unwrap_or(tr.signal_t);
+            let want = tr.dir * sign;
+            if !recent.iter().any(|&(at, ev, dir)| {
+                matches!(ev, Event::Target | Event::Sweep) && dir == want && filled < at && at <= t
+            }) {
+                continue;
+            }
+            let d = f64::from(tr.dir);
+            tr.state = TradeState::ReferenceExit;
+            tr.r = Some((close - tr.entry) * d / ((tr.entry - tr.stop) * d));
+            tr.exit_t = Some(t);
+            if let Some(k) = tr.plan {
+                self.plans[k].state = PlanState::Done;
+            }
+            if tr.kind == Kind::Range {
+                self.rbox = None;
+            }
+        }
     }
     fn entry_hour(&self, end: i64) -> bool {
         self.cfg
@@ -776,6 +871,7 @@ impl Swing {
                 plan: None,
                 range_box: Some(r.id),
             });
+            self.events.push((b.end, Event::Sweep, dir));
             break;
         }
     }
@@ -783,6 +879,15 @@ impl Swing {
     pub fn minute(&mut self, t: i64, high: f64, low: f64) {
         if t < self.cfg.start {
             return;
+        }
+        for p in &mut self.plans {
+            if p.state != PlanState::Done
+                && !p.target_hit
+                && ((p.dir > 0 && high >= p.target) || (p.dir < 0 && low <= p.target))
+            {
+                p.target_hit = true;
+                self.events.push((t, Event::Target, p.dir));
+            }
         }
         for tr in &mut self.trades {
             let d = f64::from(tr.dir);

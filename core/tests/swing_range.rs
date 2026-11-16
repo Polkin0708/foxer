@@ -153,3 +153,18 @@ fn deviation_outside_entry_hours_is_skipped() {
     h4(&mut s, bar(8, 103.6, 104.15, 103.5, 103.9)); // closes 08:00
     assert!(s.trades().is_empty());
 }
+
+#[test]
+fn range_entry_is_recorded_as_a_sweep_event_and_index_exit_ends_the_range() {
+    let mut c = cfg();
+    c.reference_exit = Some(ReferenceExit {
+        sign: 1,
+        recent_events: 50,
+    });
+    let mut s = swing(c, true, 7);
+    h4(&mut s, bar(8, 103.6, 104.15, 103.5, 103.9));
+    assert!(s.events().contains(&(8 * H4, Event::Sweep, -1)));
+    s.reference_minute(8 * H4 + 60, 103.8, &[(8 * H4 + 60, Event::Target, -1)]);
+    assert_eq!(s.trades()[0].state, TradeState::ReferenceExit);
+    assert_eq!(s.range_box(), None);
+}

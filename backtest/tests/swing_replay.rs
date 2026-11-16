@@ -58,3 +58,19 @@ fn empty_bins_produce_no_bars_and_ends_keep_their_own_grid_time() {
         "sorted by end time, then W, D, H4"
     );
 }
+
+#[test]
+fn dollar_index_minutes_exist_only_where_all_six_pairs_have_the_minute() {
+    let pairs: Vec<Vec<Minute>> = (0..6)
+        .map(|k| {
+            (0..3)
+                .filter(|&i| !(k == 4 && i == 1))
+                .map(|i| minute(MONDAY + 60 * i, 1.0, 1.0, 1.0, 1.0))
+                .collect()
+        })
+        .collect();
+    let index = build_dollar_index(&pairs);
+    let times: Vec<i64> = index.iter().map(|m| m.time).collect();
+    assert_eq!(times, [MONDAY, MONDAY + 120]);
+    assert!((index[0].close - 50.14348112).abs() < 1e-9);
+}
