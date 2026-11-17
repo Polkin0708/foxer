@@ -116,9 +116,9 @@ pub enum TakeProfit {
     Fixed,
     Target,
 }
-/// Range trading parameters (requirements: Торговля в боковике).
+/// Range trading parameters (requirements: Торговля в боковике). Every field is required in JSON.
 #[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
+#[serde(deny_unknown_fields)]
 pub struct RangeConfig {
     pub enabled: bool,
     pub min_h4_bars: usize,
@@ -152,8 +152,10 @@ impl Default for RangeConfig {
         }
     }
 }
+/// Swing rule parameters. Every field except `reference_exit` is required in JSON;
+/// `Default` exists only for building rules in code.
 #[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
+#[serde(deny_unknown_fields)]
 pub struct SwingConfig {
     pub atr_period: usize,
     pub rr_fixed: f64,

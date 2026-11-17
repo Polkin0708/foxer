@@ -1,0 +1,129 @@
+{
+  "comment": "Правила «свинг» (тренд, коррекция, боковик) для бота. Все параметры указаны явно, значений по умолчанию в коде нет. Поля comment и comments — пояснения, не условия расчёта.",
+  "comments": {
+    "atr_period": "Число закрытых свечей своего таймфрейма для среднего high − low (ATR).",
+    "rr_fixed": "Тейк в R от риска. Если до цели плана RR не меньше этого числа — вход по рынку с тейком rr_fixed, иначе лимитная заявка в точке, где RR равен rr_fixed.",
+    "take_profit": "fixed — тейк всегда rr_fixed; target — тейк на цели плана, но не дальше rr_target_cap.",
+    "rr_target_cap": "Предел тейка в R для take_profit = target.",
+    "plan_days": "Сколько закрытий дня живёт план без входа.",
+    "stop_lookback_h4_bars": "Сколько последних свечей H4 просматривается для фрактала стопа.",
+    "stop_buffer_atr": "Отступ стопа за фрактал H4 в долях ATR H4.",
+    "correction_h4_confirm_without_opposing_zone": "Коррекция подтверждается на H4, если до цели нет живой встречной зоны D; иначе только на D.",
+    "entry_close_hours": "Часы закрытия H4 (сетка источника: время Нью-Йорка + 7 ч), на которых разрешён вход.",
+    "cost": "Издержки сделки в единицах цены, учитываются против сделки на входе.",
+    "start": "Unix-время: свечи до него только строят контекст, сделки не открываются.",
+    "range.enabled": "Торговля в боковике включена.",
+    "range.min_h4_bars": "Боковик ищется, когда закрытых свечей H4 больше этого числа.",
+    "range.window_min": "Минимальная длина окна боковика в свечах H4.",
+    "range.window_max": "Максимальная длина окна боковика в свечах H4.",
+    "range.height_min_atr_d": "Минимальная высота боковика в ATR D.",
+    "range.height_max_atr_d": "Максимальная высота боковика в ATR D.",
+    "range.impulse_bars": "Сколько свечей H4 перед окном проверяется на импульс.",
+    "range.impulse_min_atr_d": "Минимальный ход импульса в ATR D.",
+    "range.impulse_min_ratio": "Ход импульса должен быть не меньше высоты боковика, умноженной на это число.",
+    "range.break_fraction": "Закрытие H4 за границей дальше этой доли высоты отменяет боковик.",
+    "range.wick_min": "Минимальная тень за границей в единицах цены для входа по тени (второй вариант входа — предыдущее закрытие за границей и возврат внутрь).",
+    "range.max_stops_per_border": "После стольких стопов от одной границы новые входы от неё в этом боковике не берутся."
+  },
+  "instruments": {
+    "EURUSD": {
+      "atr_period": 14,
+      "rr_fixed": 2.0,
+      "take_profit": "fixed",
+      "rr_target_cap": 5.0,
+      "plan_days": 10,
+      "stop_lookback_h4_bars": 30,
+      "stop_buffer_atr": 0.05,
+      "correction_h4_confirm_without_opposing_zone": true,
+      "entry_close_hours": [
+        0,
+        8,
+        12,
+        16,
+        20
+      ],
+      "cost": 0.0001,
+      "start": 1598918400,
+      "range": {
+        "enabled": true,
+        "min_h4_bars": 32,
+        "window_min": 12,
+        "window_max": 60,
+        "height_min_atr_d": 0.4,
+        "height_max_atr_d": 1.5,
+        "impulse_bars": 12,
+        "impulse_min_atr_d": 1.5,
+        "impulse_min_ratio": 1.2,
+        "break_fraction": 0.5,
+        "wick_min": 0.001,
+        "max_stops_per_border": 2
+      }
+    },
+    "GBPUSD": {
+      "atr_period": 14,
+      "rr_fixed": 2.0,
+      "take_profit": "fixed",
+      "rr_target_cap": 5.0,
+      "plan_days": 10,
+      "stop_lookback_h4_bars": 30,
+      "stop_buffer_atr": 0.05,
+      "correction_h4_confirm_without_opposing_zone": true,
+      "entry_close_hours": [
+        0,
+        8,
+        12,
+        16,
+        20
+      ],
+      "cost": 0.0001,
+      "start": 1598918400,
+      "range": {
+        "enabled": false,
+        "min_h4_bars": 32,
+        "window_min": 12,
+        "window_max": 60,
+        "height_min_atr_d": 0.4,
+        "height_max_atr_d": 1.5,
+        "impulse_bars": 12,
+        "impulse_min_atr_d": 1.5,
+        "impulse_min_ratio": 1.2,
+        "break_fraction": 0.5,
+        "wick_min": 0.001,
+        "max_stops_per_border": 2
+      }
+    },
+    "USDJPY": {
+      "atr_period": 14,
+      "rr_fixed": 2.0,
+      "take_profit": "fixed",
+      "rr_target_cap": 5.0,
+      "plan_days": 10,
+      "stop_lookback_h4_bars": 30,
+      "stop_buffer_atr": 0.05,
+      "correction_h4_confirm_without_opposing_zone": true,
+      "entry_close_hours": [
+        0,
+        8,
+        12,
+        16,
+        20
+      ],
+      "cost": 0.01,
+      "start": 1598918400,
+      "range": {
+        "enabled": true,
+        "min_h4_bars": 32,
+        "window_min": 12,
+        "window_max": 60,
+        "height_min_atr_d": 0.4,
+        "height_max_atr_d": 1.5,
+        "impulse_bars": 12,
+        "impulse_min_atr_d": 1.5,
+        "impulse_min_ratio": 1.2,
+        "break_fraction": 0.5,
+        "wick_min": 0.1,
+        "max_stops_per_border": 2
+      }
+    }
+  }
+}

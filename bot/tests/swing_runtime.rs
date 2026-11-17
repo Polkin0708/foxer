@@ -15,8 +15,11 @@ fn path() -> std::path::PathBuf {
 fn rules() -> Value {
     serde_json::from_str(include_str!("../../strategy/fvg-bot-rules.json")).unwrap()
 }
+fn file() -> Value {
+    serde_json::from_str(include_str!("../../strategy/swing-rules.json")).unwrap()
+}
 fn config() -> Value {
-    json!({"cost": 0.0001})
+    file()["instruments"]["EURUSD"].clone()
 }
 /// Rules with one long trend plan confirmed and entered on an H4 gap.
 fn planned() -> Swing {
@@ -121,18 +124,19 @@ fn changed_parameters_warm_up_again_and_index_exit_is_rejected() {
     let mut r = Runtime::open(&p, rules(), Engine::default()).unwrap();
     r.swing("EURUSD", config(), || Ok(planned())).unwrap();
     let mut warmed = false;
-    r.swing("EURUSD", json!({"cost": 0.0002}), || {
+    let mut changed = config();
+    changed["cost"] = json!(0.0002);
+    r.swing("EURUSD", changed, || {
         warmed = true;
         Ok(planned())
     })
     .unwrap();
     assert!(warmed);
+    let mut index = config();
+    index["reference_exit"] = json!({"sign": -1, "recent_events": 50});
+    assert!(r.swing("EURUSD", index, || Ok(planned())).is_err());
     assert!(r
-        .swing(
-            "EURUSD",
-            json!({"reference_exit": {"sign": -1, "recent_events": 50}}),
-            || Ok(planned())
-        )
+        .swing("EURUSD", json!({"cost": 0.0001}), || Ok(planned()))
         .is_err());
     assert!(r.swing("XAUUSD", config(), || Ok(planned())).is_err());
     std::fs::remove_file(p).ok();
@@ -166,4 +170,40 @@ fn warm_up_replays_stored_minutes_through_the_bot_aggregator() {
     )
     .unwrap();
     assert!(forex_bot::service::swing_warmup(&p, "EURUSD", &config()).is_err());
+}
+#[test]
+fn strategy_file_sets_and_explains_every_parameter() {
+    fn keys(v: &Value, prefix: &str, out: &mut Vec<String>) {
+        for (k, x) in v.as_object().unwrap() {
+            if x.is_object() {
+                keys(x, &format!("{prefix}{k}."), out);
+            } else {
+                out.push(format!("{prefix}{k}"));
+            }
+        }
+    }
+    let f = file();
+    let mut explained: Vec<String> = f["comments"].as_object().unwrap().keys().cloned().collect();
+    explained.sort();
+    for symbol in ["EURUSD", "GBPUSD", "USDJPY"] {
+        let c = &f["instruments"][symbol];
+        serde_json::from_value::<SwingConfig>(c.clone()).unwrap();
+        let mut set = vec![];
+        keys(c, "", &mut set);
+        set.sort();
+        assert_eq!(set, explained, "{symbol}");
+        for key in &set {
+            let mut short = c.clone();
+            let path: Vec<&str> = key.split('.').collect();
+            let mut node = &mut short;
+            for p in &path[..path.len() - 1] {
+                node = &mut node[*p];
+            }
+            node.as_object_mut().unwrap().remove(path[path.len() - 1]);
+            assert!(
+                serde_json::from_value::<SwingConfig>(short).is_err(),
+                "{symbol}: {key} must be required"
+            );
+        }
+    }
 }
