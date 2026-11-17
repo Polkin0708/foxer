@@ -17,6 +17,21 @@ pub struct Bar {
     pub low: f64,
     pub close: f64,
 }
+/// UTC time on the source grid: New York wall time plus seven hours, as naive seconds.
+pub fn grid_time(utc: i64) -> i64 {
+    use chrono::TimeZone;
+    chrono::Utc
+        .timestamp_opt(utc, 0)
+        .single()
+        .map(|t| {
+            t.with_timezone(&chrono_tz::America::New_York)
+                .naive_local()
+                .and_utc()
+                .timestamp()
+                + 7 * 3600
+        })
+        .unwrap_or(utc)
+}
 /// One minute of an instrument without its time.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Ohlc {

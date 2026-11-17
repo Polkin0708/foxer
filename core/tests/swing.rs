@@ -202,3 +202,17 @@ fn nothing_is_planned_or_traded_before_start() {
     feed(&mut s, &bullish_gap(end));
     assert!(s.trades().is_empty());
 }
+
+#[test]
+fn grid_time_is_new_york_wall_time_plus_seven_hours() {
+    // 2024-01-10 02:00 UTC = 21:00 New York (EST) -> 04:00 on the source grid
+    assert_eq!(
+        grid_time(1_704_852_000),
+        1_704_852_000 - 5 * 3600 + 7 * 3600
+    );
+    // 2024-07-10 01:00 UTC = 21:00 New York (EDT) -> 04:00 on the source grid
+    assert_eq!(
+        grid_time(1_720_573_200),
+        1_720_573_200 - 4 * 3600 + 7 * 3600
+    );
+}

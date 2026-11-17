@@ -212,6 +212,10 @@ pub fn run(
         swing.reference_minute(m.time, m.close, &events[..known]);
         swing.minute(m.time, m.high, m.low);
     }
+    write_trades(&swing, output)
+}
+/// Writes the trade list and prints a summary.
+pub fn write_trades(swing: &Swing, output: &Path) -> Result<(), String> {
     let mut out = std::fs::File::create(output).map_err(|_| "cannot create output")?;
     writeln!(
         out,
@@ -254,7 +258,7 @@ pub fn run(
     }
     println!(
         "{}",
-        serde_json::json!({"trades": swing.trades().len(), "closed": closed, "net_r": net})
+        serde_json::json!({"trades": swing.trades().len(), "closed": closed, "net_r": net, "bars": {"W": swing.frame(Tf::W).len(), "D": swing.frame(Tf::D).len(), "H4": swing.frame(Tf::H4).len()}})
     );
     Ok(())
 }

@@ -8,6 +8,7 @@ use serde_json::{json, Value};
 use std::collections::BTreeMap;
 pub mod history;
 pub mod runner;
+pub mod swing_history;
 pub mod swing_replay;
 #[derive(Default, Serialize, Deserialize)]
 pub struct Ledger {

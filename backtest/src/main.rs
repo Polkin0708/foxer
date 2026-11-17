@@ -16,12 +16,16 @@ fn execute() -> Result<(), String> {
         let index = (args.len() == 6).then(|| (p(4), p(5)));
         return forex_backtest::swing_replay::run(p(1), p(2), p(3), index);
     }
+    if args.len() == 5 && args[0] == "swing-history" {
+        let p = |k: usize| std::path::Path::new(&args[k]);
+        return forex_backtest::swing_history::run(p(1), &args[2], p(3), p(4));
+    }
     if args.len() == 8 && args[0] == "dxy-build" {
         let inputs: Vec<&std::path::Path> = args[1..7].iter().map(std::path::Path::new).collect();
         return forex_backtest::swing_replay::build(&inputs, std::path::Path::new(&args[7]));
     }
     if args == ["--help"] {
-        println!("forex-backtest --strategy FILE --data-config FILE --from UTC --to UTC [--symbols A,B] --output NEW_DIR [--no-pdf]\nforex-backtest --report-only RESULT_DIR\nforex-backtest swing-replay MT5_M1.csv SWING_CONFIG.json NEW_TRADES.csv [INDEX_M1.csv INDEX_CONFIG.json]\nforex-backtest dxy-build EURUSD.csv USDJPY.csv GBPUSD.csv USDCAD.csv USDSEK.csv USDCHF.csv NEW_INDEX.csv");
+        println!("forex-backtest --strategy FILE --data-config FILE --from UTC --to UTC [--symbols A,B] --output NEW_DIR [--no-pdf]\nforex-backtest --report-only RESULT_DIR\nforex-backtest swing-replay MT5_M1.csv SWING_CONFIG.json NEW_TRADES.csv [INDEX_M1.csv INDEX_CONFIG.json]\nforex-backtest swing-history HISTORY_ROOT SYMBOL SWING_CONFIG.json NEW_TRADES.csv\nforex-backtest dxy-build EURUSD.csv USDJPY.csv GBPUSD.csv USDCAD.csv USDSEK.csv USDCHF.csv NEW_INDEX.csv");
         return Ok(());
     }
     let mut values = std::collections::BTreeMap::new();
