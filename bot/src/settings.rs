@@ -13,6 +13,7 @@ pub struct Settings {
     pub database: PathBuf,
     pub strategy: PathBuf,
     pub stale_seconds: i64,
+    pub swing_strategy: Option<PathBuf>,
 }
 impl Settings {
     pub fn load(path: &Path) -> Result<Self, String> {
@@ -30,6 +31,7 @@ impl Settings {
             "QUOTE_STALE_SECONDS",
             "PRICE_TICK",
             "UPSCALE_API_KEY",
+            "SWING_STRATEGY",
         ];
         let mut values = BTreeMap::new();
         for line in text
@@ -59,7 +61,9 @@ impl Settings {
             }
         }
         for name in names {
-            if !matches!(name, "PRICE_TICK" | "UPSCALE_API_KEY") && !values.contains_key(name) {
+            if !matches!(name, "PRICE_TICK" | "UPSCALE_API_KEY" | "SWING_STRATEGY")
+                && !values.contains_key(name)
+            {
                 return Err(format!("missing setting: {name}"));
             }
         }
@@ -88,6 +92,7 @@ impl Settings {
             database: values["DATABASE_PATH"].into(),
             strategy: values["STRATEGY_PATH"].into(),
             stale_seconds,
+            swing_strategy: values.get("SWING_STRATEGY").map(PathBuf::from),
         })
     }
 }

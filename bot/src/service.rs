@@ -289,6 +289,69 @@ fn feed_worker(
         thread::sleep(Duration::from_secs(delay));
     }
 }
+/// Builds swing rules for `symbol` from all stored minutes (requirements: Правила «свинг»
+/// в работе бота, прогрев). The stored minutes of the instrument must come from one source.
+pub fn swing_warmup(
+    database: &Path,
+    symbol: &str,
+    config: &Value,
+) -> Result<crate::swing::Swing, String> {
+    let cfg: crate::swing::SwingConfig = serde_json::from_value(config.clone())
+        .map_err(|e| format!("invalid swing rules for {symbol}: {e}"))?;
+    let db = crate::data::open(database).map_err(|e| e.to_string())?;
+    let mut sources = db
+        .prepare("SELECT DISTINCT source FROM minutes WHERE symbol=?1")
+        .map_err(|e| e.to_string())?;
+    let sources: Vec<String> = sources
+        .query_map([symbol], |r| r.get(0))
+        .map_err(|e| e.to_string())?
+        .collect::<Result<_, _>>()
+        .map_err(|e| e.to_string())?;
+    let [source] = sources.as_slice() else {
+        return Err(format!(
+            "swing warm-up for {symbol} needs minutes from exactly one source"
+        ));
+    };
+    let mut rows = db
+        .prepare("SELECT payload FROM minutes WHERE symbol=?1 AND source=?2 ORDER BY timestamp")
+        .map_err(|e| e.to_string())?;
+    let mut rows = rows
+        .query(rusqlite::params![symbol, source])
+        .map_err(|e| e.to_string())?;
+    let mut swing = crate::swing::Swing::new(cfg);
+    let mut aggregator = crate::feed::Aggregator::default();
+    while let Some(row) = rows.next().map_err(|e| e.to_string())? {
+        let payload: String = row.get(0).map_err(|e| e.to_string())?;
+        let m: forex_core::prices::Minute =
+            serde_json::from_str(&payload).map_err(|_| "invalid stored minute")?;
+        let bars = aggregator.minute_all(symbol, source, &m)?;
+        let now = crate::swing::grid_time(m.timestamp);
+        for (tf, bar) in crate::swing::rules_bars(&bars) {
+            swing.close(tf, bar, now);
+        }
+        swing.minute(now, m.price[1] as f64 / 1e6, m.price[2] as f64 / 1e6);
+    }
+    Ok(swing)
+}
+/// Connects the swing rules file to the runtime, one instrument at a time.
+fn connect_swing(runtime: &mut Runtime, c: &Settings) -> Result<(), String> {
+    let Some(path) = &c.swing_strategy else {
+        return Ok(());
+    };
+    let file: Value =
+        serde_json::from_slice(&std::fs::read(path).map_err(|_| "cannot read swing rules file")?)
+            .map_err(|e| format!("invalid swing rules file: {e}"))?;
+    let instruments = file["instruments"]
+        .as_object()
+        .ok_or("swing rules file has no instruments")?;
+    for (symbol, config) in instruments {
+        runtime.swing(symbol, config.clone(), || {
+            swing_warmup(&c.database, symbol, config)
+        })?;
+        println!("{symbol}: swing rules connected");
+    }
+    Ok(())
+}
 pub fn run(path: &Path) -> Result<String, String> {
     let c = Settings::load(path)?;
     let cfg = crate::load(&c.strategy)?;
@@ -306,6 +369,7 @@ pub fn run(path: &Path) -> Result<String, String> {
     let account = accounts[0].clone();
     let mut runtime = Runtime::open_file(&c.database, &c.strategy, Engine::default())?;
     runtime.started(now())?;
+    connect_swing(&mut runtime, &c)?;
     let (tx, rx) = mpsc::sync_channel(1024);
     let feed_tx = tx.clone();
     let subscribed = symbols.clone();
@@ -591,6 +655,7 @@ mod tests {
             database: dir.join("db.sqlite"),
             strategy: "unused".into(),
             stale_seconds: 120,
+            swing_strategy: None,
         };
         let comment = Comment {
             update_id: 1,

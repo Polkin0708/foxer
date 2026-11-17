@@ -32,6 +32,35 @@ pub fn grid_time(utc: i64) -> i64 {
         })
         .unwrap_or(utc)
 }
+/// Bot candles (UTC close time, prices in millionths) as rule bars on the source grid,
+/// ordered by close time, then W, D, H4.
+pub fn rules_bars(
+    bars: &[(crate::engine::Timeframe, crate::trading::Candle, bool)],
+) -> Vec<(Tf, Bar)> {
+    use crate::engine::Timeframe;
+    const SCALE: f64 = 1_000_000.0;
+    let mut out: Vec<(Tf, Bar)> = bars
+        .iter()
+        .map(|(t, c, _)| {
+            (
+                match t {
+                    Timeframe::W => Tf::W,
+                    Timeframe::D => Tf::D,
+                    Timeframe::H4 => Tf::H4,
+                },
+                Bar {
+                    end: grid_time(c.end),
+                    open: c.open as f64 / SCALE,
+                    high: c.high as f64 / SCALE,
+                    low: c.low as f64 / SCALE,
+                    close: c.close as f64 / SCALE,
+                },
+            )
+        })
+        .collect();
+    out.sort_by(|a, b| (a.1.end, a.0).cmp(&(b.1.end, b.0)));
+    out
+}
 /// One minute of an instrument without its time.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Ohlc {
@@ -183,9 +212,12 @@ pub struct Gap {
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct Frame {
     atr_period: usize,
-    pub high: Vec<f64>,
-    pub low: Vec<f64>,
-    pub close: Vec<f64>,
+    /// Absolute index of the first stored bar; older bars were compacted away.
+    #[serde(default)]
+    offset: usize,
+    high: Vec<f64>,
+    low: Vec<f64>,
+    close: Vec<f64>,
     pub fr_hi: Vec<Fractal>,
     pub fr_lo: Vec<Fractal>,
     pub fvg: Vec<Gap>,
@@ -197,17 +229,68 @@ impl Frame {
             ..Self::default()
         }
     }
+    /// Number of bars pushed so far, including compacted ones.
     pub fn len(&self) -> usize {
-        self.close.len()
+        self.offset + self.close.len()
     }
     pub fn is_empty(&self) -> bool {
-        self.close.is_empty()
+        self.len() == 0
+    }
+    /// Number of bars still stored.
+    pub fn stored(&self) -> usize {
+        self.close.len()
+    }
+    pub fn high(&self, k: usize) -> f64 {
+        self.high[k - self.offset]
+    }
+    pub fn low(&self, k: usize) -> f64 {
+        self.low[k - self.offset]
+    }
+    pub fn close_at(&self, k: usize) -> f64 {
+        self.close[k - self.offset]
+    }
+    pub fn last_close(&self) -> Option<f64> {
+        self.close.last().copied()
+    }
+    fn extremes(&self, from: usize, to: usize) -> (f64, f64) {
+        let (a, b) = (from - self.offset, to - self.offset);
+        (
+            self.high[a..b]
+                .iter()
+                .fold(f64::NEG_INFINITY, |m, v| m.max(*v)),
+            self.low[a..b].iter().fold(f64::INFINITY, |m, v| m.min(*v)),
+        )
+    }
+    /// Drops stored bars older than `keep`, inverted gaps and fractals that no rule can reach.
+    /// `fractals`: `None` keeps all fractals; `Some(lookback)` keeps the last two of each side
+    /// and those within `lookback` bars.
+    fn compact(&mut self, keep: usize, fractals: Option<usize>) {
+        let drop = self.close.len().saturating_sub(keep);
+        if drop > 0 {
+            self.high.drain(..drop);
+            self.low.drain(..drop);
+            self.close.drain(..drop);
+            self.offset += drop;
+        }
+        self.fvg.retain(|z| z.alive);
+        if let Some(lookback) = fractals {
+            let recent = self.len().saturating_sub(lookback);
+            for list in [&mut self.fr_hi, &mut self.fr_lo] {
+                let last_two = list.len().saturating_sub(2);
+                let mut k = 0;
+                list.retain(|f| {
+                    k += 1;
+                    k > last_two || f.idx >= recent
+                });
+            }
+        }
     }
     pub fn push(&mut self, b: &Bar) {
         self.high.push(b.high);
         self.low.push(b.low);
         self.close.push(b.close);
-        let i = self.close.len() - 1;
+        let i = self.len() - 1;
+        let j = self.close.len() - 1;
         for f in &mut self.fr_hi {
             if !f.swept && b.high > f.price {
                 f.swept = true;
@@ -224,37 +307,37 @@ impl Frame {
                 z.inverted_at = Some(i);
             }
         }
-        if i >= 2 {
+        if j >= 2 {
             let (h, l) = (&self.high, &self.low);
-            if h[i - 1] > h[i - 2] && h[i - 1] > h[i] {
+            if h[j - 1] > h[j - 2] && h[j - 1] > h[j] {
                 self.fr_hi.push(Fractal {
                     idx: i - 1,
-                    price: h[i - 1],
+                    price: h[j - 1],
                     swept: false,
                 });
             }
-            if l[i - 1] < l[i - 2] && l[i - 1] < l[i] {
+            if l[j - 1] < l[j - 2] && l[j - 1] < l[j] {
                 self.fr_lo.push(Fractal {
                     idx: i - 1,
-                    price: l[i - 1],
+                    price: l[j - 1],
                     swept: false,
                 });
             }
-            if l[i] > h[i - 2] {
+            if l[j] > h[j - 2] {
                 self.fvg.push(Gap {
                     dir: 1,
-                    lo: h[i - 2],
-                    hi: l[i],
+                    lo: h[j - 2],
+                    hi: l[j],
                     idx: i,
                     alive: true,
                     inverted_at: None,
                 });
             }
-            if h[i] < l[i - 2] {
+            if h[j] < l[j - 2] {
                 self.fvg.push(Gap {
                     dir: -1,
-                    lo: h[i],
-                    hi: l[i - 2],
+                    lo: h[j],
+                    hi: l[j - 2],
                     idx: i,
                     alive: true,
                     inverted_at: None,
@@ -337,7 +420,7 @@ impl Frame {
         best
     }
     fn nearest_fractal_beyond(&self, dir: i8, level: f64, lookback: usize) -> Option<f64> {
-        let n = self.close.len() as i64;
+        let n = self.len() as i64;
         let recent = |f: &&Fractal| f.idx as i64 >= n - lookback as i64;
         let mut best: Option<f64> = None;
         if dir > 0 {
@@ -383,6 +466,8 @@ enum PlanState {
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 struct Plan {
+    #[serde(default)]
+    id: u64,
     kind: Kind,
     dir: i8,
     poi: (f64, f64),
@@ -416,7 +501,7 @@ pub struct Trade {
     pub state: TradeState,
     pub r: Option<f64>,
     pub exit_t: Option<i64>,
-    plan: Option<usize>,
+    plan: Option<u64>,
     range_box: Option<u64>,
 }
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -472,6 +557,8 @@ pub struct Swing {
     d: Frame,
     h4: Frame,
     plans: Vec<Plan>,
+    #[serde(default)]
+    next_plan: u64,
     trades: Vec<Trade>,
     d_count: usize,
     rbox: Option<RangeBox>,
@@ -488,6 +575,7 @@ impl Swing {
             d: Frame::new(n),
             h4: Frame::new(n),
             plans: vec![],
+            next_plan: 0,
             trades: vec![],
             d_count: 0,
             rbox: None,
@@ -532,7 +620,7 @@ impl Swing {
         }
         let mut conf_tf = conf_tf;
         if self.cfg.correction_h4_confirm_without_opposing_zone && conf_tf == Tf::D {
-            let opposed = self.d.close.last().is_some_and(|&px| {
+            let opposed = self.d.last_close().is_some_and(|px| {
                 self.d.fvg.iter().any(|z| {
                     z.alive
                         && z.dir == -dir
@@ -547,7 +635,9 @@ impl Swing {
                 conf_tf = Tf::H4;
             }
         }
+        self.next_plan += 1;
         self.plans.push(Plan {
+            id: self.next_plan,
             kind,
             dir,
             poi,
@@ -567,9 +657,38 @@ impl Swing {
             Tf::D => self.d.push(&b),
             Tf::H4 => self.h4.push(&b),
         }
-        if now < self.cfg.start {
-            return;
+        if now >= self.cfg.start {
+            self.decide(tf, &b);
         }
+        self.compact();
+    }
+    /// Removes data that can no longer change a decision (requirements: Сохранение).
+    fn compact(&mut self) {
+        let keep = 128
+            .max(self.cfg.range.window_max + self.cfg.range.impulse_bars + 2)
+            .max(self.cfg.atr_period + 2);
+        self.w.compact(keep, None);
+        self.d.compact(keep, Some(0));
+        self.h4
+            .compact(keep, Some(self.cfg.stop_lookback_h4_bars + 1));
+        let extra = self.events.len().saturating_sub(100);
+        self.events.drain(..extra);
+        self.plans.retain(|p| p.state != PlanState::Done);
+    }
+    /// Removes and returns trades that are finished (stop, target, cancelled, index exit).
+    pub fn drain_finished(&mut self) -> Vec<Trade> {
+        let (done, open): (Vec<Trade>, Vec<Trade>) = std::mem::take(&mut self.trades)
+            .into_iter()
+            .partition(|t| !matches!(t.state, TradeState::Pending | TradeState::Active));
+        self.trades = open;
+        done
+    }
+    /// Drains recorded events (time, event, direction).
+    pub fn take_events(&mut self) -> Vec<(i64, Event, i8)> {
+        std::mem::take(&mut self.events)
+    }
+    fn decide(&mut self, tf: Tf, b: &Bar) {
+        let b = *b;
         if tf == Tf::D {
             self.d_count += 1;
         }
@@ -599,7 +718,7 @@ impl Swing {
             }
         }
         let n = self.w.len();
-        let (prev_high, prev_low) = (self.w.high[n - 2], self.w.low[n - 2]);
+        let (prev_high, prev_low) = (self.w.high(n - 2), self.w.low(n - 2));
         let fractals = if s > 0 { &self.w.fr_hi } else { &self.w.fr_lo };
         let passed: Vec<f64> = fractals
             .iter()
@@ -702,7 +821,7 @@ impl Swing {
             },
             r: None,
             exit_t: None,
-            plan: Some(k),
+            plan: Some(self.plans[k].id),
             range_box: None,
         });
         self.plans[k].state = PlanState::Active;
@@ -732,8 +851,11 @@ impl Swing {
             tr.state = TradeState::ReferenceExit;
             tr.r = Some((close - tr.entry) * d / ((tr.entry - tr.stop) * d));
             tr.exit_t = Some(t);
-            if let Some(k) = tr.plan {
-                self.plans[k].state = PlanState::Done;
+            if let Some(p) = tr
+                .plan
+                .and_then(|id| self.plans.iter_mut().find(|p| p.id == id))
+            {
+                p.state = PlanState::Done;
             }
             if tr.kind == Kind::Range {
                 self.rbox = None;
@@ -748,12 +870,11 @@ impl Swing {
     fn estimate_box(&mut self) -> Option<RangeBox> {
         let rc = &self.cfg.range;
         let a = self.d.atr().filter(|a| *a > 0.0)?;
-        let (h, l, n) = (&self.h4.high, &self.h4.low, self.h4.len());
+        let n = self.h4.len();
         let mut best: Option<(usize, f64, f64)> = None;
         for k in rc.window_min..=rc.window_max.min(n - 1) {
             let (from, to) = (n - k - 1, n - 1);
-            let top = h[from..to].iter().fold(f64::NEG_INFINITY, |m, v| m.max(*v));
-            let bot = l[from..to].iter().fold(f64::INFINITY, |m, v| m.min(*v));
+            let (top, bot) = self.h4.extremes(from, to);
             if top - bot > rc.height_max_atr_d * a {
                 break;
             }
@@ -766,8 +887,8 @@ impl Swing {
             return None;
         }
         let (from, to) = (n - k - 1 - rc.impulse_bars, n - k - 1);
-        let travel = h[from..to].iter().fold(f64::NEG_INFINITY, |m, v| m.max(*v))
-            - l[from..to].iter().fold(f64::INFINITY, |m, v| m.min(*v));
+        let (high, low) = self.h4.extremes(from, to);
+        let travel = high - low;
         if travel < rc.impulse_min_atr_d * a || travel < rc.impulse_min_ratio * (top - bot) {
             return None;
         }
@@ -806,9 +927,9 @@ impl Swing {
         }
         let n = self.h4.len();
         let (prev_close, prev_high, prev_low) = (
-            self.h4.close[n - 2],
-            self.h4.high[n - 2],
-            self.h4.low[n - 2],
+            self.h4.close_at(n - 2),
+            self.h4.high(n - 2),
+            self.h4.low(n - 2),
         );
         let a4 = self.h4.atr().unwrap_or(0.0);
         let rc = &self.cfg.range;
@@ -909,13 +1030,19 @@ impl Swing {
             let long = tr.dir > 0;
             if tr.state == TradeState::Pending {
                 let target_first = if long { high >= tr.tp } else { low <= tr.tp };
-                let plan_done = tr
-                    .plan
-                    .is_some_and(|k| self.plans[k].state == PlanState::Done);
+                let plan_done = tr.plan.is_some_and(|id| {
+                    self.plans
+                        .iter()
+                        .find(|p| p.id == id)
+                        .is_none_or(|p| p.state == PlanState::Done)
+                });
                 if plan_done || target_first {
                     tr.state = TradeState::Cancelled;
-                    if let Some(k) = tr.plan {
-                        self.plans[k].state = PlanState::Done;
+                    if let Some(p) = tr
+                        .plan
+                        .and_then(|id| self.plans.iter_mut().find(|p| p.id == id))
+                    {
+                        p.state = PlanState::Done;
                     }
                     continue;
                 }
@@ -947,8 +1074,11 @@ impl Swing {
                 continue;
             }
             tr.exit_t = Some(t);
-            if let Some(k) = tr.plan {
-                self.plans[k].state = PlanState::Done;
+            if let Some(p) = tr
+                .plan
+                .and_then(|id| self.plans.iter_mut().find(|p| p.id == id))
+            {
+                p.state = PlanState::Done;
             }
             if tr.kind == Kind::Range {
                 if tr.state == TradeState::Stop {

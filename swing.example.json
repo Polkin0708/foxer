@@ -1,0 +1,7 @@
+{
+  "instruments": {
+    "EURUSD": {"cost": 0.0001, "start": 1598918400, "range": {"enabled": true, "wick_min": 0.001}},
+    "GBPUSD": {"cost": 0.0001, "start": 1598918400},
+    "USDJPY": {"cost": 0.01, "start": 1598918400, "range": {"enabled": true, "wick_min": 0.1}}
+  }
+}

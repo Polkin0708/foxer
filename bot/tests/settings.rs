@@ -61,3 +61,12 @@ fn upscale_key_preserves_strict_validation_without_exposing_values() {
         assert!(!error.contains("other-private-value"));
     }
 }
+#[test]
+fn swing_rules_path_is_optional() {
+    assert_eq!(Settings::parse(&valid()).unwrap().swing_strategy, None);
+    let c = Settings::parse(&format!("{}SWING_STRATEGY=strategy/swing.json\n", valid())).unwrap();
+    assert_eq!(
+        c.swing_strategy.as_deref(),
+        Some(std::path::Path::new("strategy/swing.json"))
+    );
+}

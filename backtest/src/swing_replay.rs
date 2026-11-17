@@ -171,13 +171,14 @@ fn load_config(path: &Path) -> Result<SwingConfig, String> {
 fn index_events(csv: &Path, config: &Path) -> Result<Vec<(i64, Event, i8)>, String> {
     let mut swing = Swing::new(load_config(config)?);
     let mut bars = Bars::default();
+    let mut events = vec![];
     for m in read_minutes(csv)? {
         for (tf, bar) in bars.push(&m) {
             swing.close(tf, bar, m.time);
         }
         swing.minute(m.time, m.high, m.low);
+        events.extend(swing.take_events());
     }
-    let mut events = swing.events().to_vec();
     events.sort();
     Ok(events)
 }

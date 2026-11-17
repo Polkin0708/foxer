@@ -216,3 +216,34 @@ fn grid_time_is_new_york_wall_time_plus_seven_hours() {
         1_720_573_200 - 4 * 3600 + 7 * 3600
     );
 }
+
+#[test]
+fn compaction_keeps_only_recent_bars_and_the_absolute_bar_count() {
+    let mut s = Swing::new(cfg());
+    for k in 1..=300 {
+        let p = 100.0 + (k % 7) as f64;
+        s.close(Tf::H4, bar(k * H4, p, p + 1.0, p - 1.0, p + 0.5), k * H4);
+    }
+    assert_eq!(s.frame(Tf::H4).len(), 300);
+    assert!(s.frame(Tf::H4).stored() <= 128);
+    assert!(s.frame(Tf::H4).atr().is_some());
+}
+
+#[test]
+fn rules_bars_convert_bot_candles_to_the_source_grid_in_order() {
+    use forex_core::{engine::Timeframe, trading::Candle};
+    let c = |end| Candle {
+        end,
+        open: 1_100_000,
+        high: 1_200_000,
+        low: 1_000_000,
+        close: 1_150_000,
+    };
+    let out = rules_bars(&[
+        (Timeframe::W, c(1_704_852_000), true),
+        (Timeframe::H4, c(1_704_837_600), false),
+    ]);
+    assert_eq!(out[0].0, Tf::H4);
+    assert_eq!(out[1].1.end, 1_704_852_000 + 2 * 3600);
+    assert_eq!(out[1].1.close, 1.15);
+}

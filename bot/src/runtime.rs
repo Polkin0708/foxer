@@ -4,6 +4,7 @@ use crate::{
     model::Strategy,
     protocols::{self, Analysis, Comment},
     state::{Entity, Kind, Outbound, Store},
+    swing::{Kind as SwingKind, Swing, SwingConfig, Trade as SwingTrade, TradeState},
     trading::{Side, Signal},
 };
 use serde::{Deserialize, Serialize};
@@ -39,6 +40,73 @@ struct Market {
     engine: Engine,
     aggregator: Aggregator,
     feed_down: bool,
+    #[serde(default)]
+    swing: Option<SwingMarket>,
+}
+/// Swing rules of one instrument (requirements: Правила «свинг» в работе бота).
+#[derive(Clone, Serialize, Deserialize)]
+struct SwingMarket {
+    config: Value,
+    rules: Swing,
+    /// Last published event per open trade.
+    published: BTreeMap<String, String>,
+}
+fn swing_id(symbol: &str, t: &SwingTrade) -> String {
+    let kind = match t.kind {
+        SwingKind::Trend => "trend",
+        SwingKind::Correction => "correction",
+        SwingKind::Range => "range",
+    };
+    format!("{symbol}:swing:{kind}:{}:{}", t.dir, t.signal_t)
+}
+fn swing_event(t: &SwingTrade, previous: Option<&str>) -> &'static str {
+    match t.state {
+        TradeState::Pending => "Лимитная заявка",
+        TradeState::Active if previous == Some("Лимитная заявка") => {
+            "Заявка исполнена"
+        }
+        TradeState::Active if t.fill_t.is_some_and(|f| f != t.signal_t) => "Заявка исполнена",
+        TradeState::Active => "Сделка открыта",
+        TradeState::Stop => "Стоп",
+        TradeState::Target => "Тейк",
+        TradeState::Cancelled => "Заявка снята",
+        TradeState::ReferenceExit => "Закрыта по индексу доллара",
+    }
+}
+pub fn swing_text(symbol: &str, t: &SwingTrade, event: &str, time: Option<i64>) -> String {
+    let pair = format!("{}/{}", &symbol[..3], &symbol[3..]);
+    let side = if t.dir > 0 {
+        "покупка"
+    } else {
+        "продажа"
+    };
+    let kind = match t.kind {
+        SwingKind::Trend => "тренд",
+        SwingKind::Correction => "коррекция",
+        SwingKind::Range => "боковик",
+    };
+    let digits = if symbol.ends_with("JPY") { 3 } else { 5 };
+    let p = |v: f64| format!("{v:.digits$}");
+    let order = if t.fill_t == Some(t.signal_t) {
+        "по рынку"
+    } else {
+        "лимит"
+    };
+    let when = time
+        .and_then(|time| chrono::DateTime::from_timestamp(time, 0))
+        .map(|t| format!("\n{}", t.to_rfc3339()))
+        .unwrap_or_default();
+    let rr = (t.tp - t.entry).abs() / (t.entry - t.stop).abs();
+    let mut text = format!(
+        "{pair} · {side} · {kind}\n{event}\nВход {} ({order}) · стоп {} · тейк {} · RR {rr:.2}{when}",
+        p(t.entry),
+        p(t.stop),
+        p(t.tp)
+    );
+    if let Some(r) = t.r {
+        text.push_str(&format!("\nРезультат {r:+.2}R"));
+    }
+    text
 }
 #[derive(Clone, Serialize, Deserialize)]
 struct RuleOperation {
@@ -565,8 +633,53 @@ impl Runtime {
                 None,
             ));
         }
+        if let Some(sw) = m.swing.as_mut() {
+            let now = crate::swing::grid_time(t.millis / 1000);
+            for (tf, bar) in crate::swing::rules_bars(&batch.all_bars) {
+                sw.rules.close(tf, bar, now);
+            }
+            let price = t.price as f64 / 1_000_000.0;
+            sw.rules.minute(now, price, price);
+            let mut trades = sw.rules.drain_finished();
+            trades.extend(sw.rules.trades().iter().cloned());
+            for tr in &trades {
+                let key = swing_id(&symbol, tr);
+                let previous = sw.published.get(&key).cloned();
+                let mut events = vec![];
+                if previous.is_none()
+                    && tr.state != TradeState::Pending
+                    && tr.state != TradeState::Active
+                {
+                    events.push(if tr.fill_t == Some(tr.signal_t) {
+                        "Сделка открыта"
+                    } else {
+                        "Лимитная заявка"
+                    });
+                }
+                let event = swing_event(tr, previous.as_deref());
+                if previous.as_deref() != Some(event) {
+                    events.push(event);
+                }
+                for event in events {
+                    messages.push(message(
+                        format!("{id}:{key}:{event}"),
+                        swing_text(&symbol, tr, event, Some(t.millis / 1000)),
+                        Some(&key),
+                        None,
+                    ));
+                }
+                if matches!(tr.state, TradeState::Pending | TradeState::Active) {
+                    sw.published.insert(key, event.to_owned());
+                } else {
+                    sw.published.remove(&key);
+                }
+            }
+        }
         m.engine.namespace_signals(&symbol);
         for signal in m.engine.signals() {
+            if m.swing.is_some() {
+                break;
+            }
             let previous = before.iter().find(|p| p.id == signal.id);
             if previous.is_none() || previous.is_some_and(|p| p.state != signal.state) {
                 messages.push(message(
@@ -597,6 +710,67 @@ impl Runtime {
         }
         self.commit(&id, event, s, messages)?;
         Ok(logs)
+    }
+    /// Connects swing rules to an instrument. `warm` builds the rules from history and is
+    /// called only when the instrument has no rules yet or its parameters changed.
+    pub fn swing(
+        &mut self,
+        symbol: &str,
+        config: Value,
+        warm: impl FnOnce() -> Result<Swing, String>,
+    ) -> Result<(), String> {
+        let parsed: SwingConfig = serde_json::from_value(config.clone())
+            .map_err(|e| format!("invalid swing rules for {symbol}: {e}"))?;
+        if parsed.reference_exit.is_some() {
+            return Err("swing reference_exit is not available in the live bot".into());
+        }
+        let current = self
+            .s
+            .markets
+            .get(symbol)
+            .ok_or("swing rules for an unknown instrument")?;
+        if current.swing.as_ref().is_some_and(|sw| sw.config == config) {
+            return Ok(());
+        }
+        let mut rules = warm()?;
+        rules.drain_finished();
+        let mut s = self.s.clone();
+        s.sequence += 1;
+        let tag = format!("swing:{symbol}:{}:{}", hash(&config), s.sequence);
+        let mut published = BTreeMap::new();
+        let mut messages = vec![];
+        for tr in rules.trades() {
+            let key = swing_id(symbol, tr);
+            let event = if tr.state == TradeState::Pending {
+                "Заявка до запуска"
+            } else {
+                "Открыта до запуска"
+            };
+            messages.push(message(
+                format!("{tag}:{key}"),
+                swing_text(symbol, tr, event, None),
+                Some(&key),
+                None,
+            ));
+            published.insert(key, swing_event(tr, None).to_owned());
+        }
+        s.markets
+            .get_mut(symbol)
+            .ok_or("swing rules for an unknown instrument")?
+            .swing = Some(SwingMarket {
+            config: config.clone(),
+            rules,
+            published,
+        });
+        self.commit(&tag, json!({"symbol":symbol,"swing":config}), s, messages)
+    }
+    pub fn swing_rules(&self, symbol: &str) -> Option<&Swing> {
+        self.s
+            .markets
+            .get(symbol)?
+            .swing
+            .as_ref()
+            .map(|sw| &sw.rules)
     }
     pub fn delivered(&mut self, id: &str, message_id: i64) -> Result<(), String> {
         let Some(out) = self.store.pending()?.into_iter().find(|m| m.id == id) else {

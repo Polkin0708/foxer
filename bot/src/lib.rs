@@ -1,5 +1,5 @@
 pub use forex_core::{
-    calendar, contract, engine, load, model, processing, trading, valid_symbol, validate,
+    calendar, contract, engine, load, model, processing, swing, trading, valid_symbol, validate,
 };
 pub mod data;
 pub mod feed;

@@ -3,38 +3,14 @@ use crate::history::{json_file, read_minutes};
 use forex_core::{
     engine::Timeframe,
     feed::Aggregator,
-    swing::{grid_time, Bar, Swing, Tf},
+    swing::{grid_time, rules_bars, Bar, Swing, Tf},
     trading::Candle,
 };
 use std::path::{Path, PathBuf};
 
-const SCALE: f64 = 1_000_000.0;
-fn tf(t: Timeframe) -> Tf {
-    match t {
-        Timeframe::W => Tf::W,
-        Timeframe::D => Tf::D,
-        Timeframe::H4 => Tf::H4,
-    }
-}
 /// Aggregator bars converted for the rules and ordered by close time, then W, D, H4.
 pub fn to_rules(bars: &[(Timeframe, Candle, bool)]) -> Vec<(Tf, Bar)> {
-    let mut out: Vec<(Tf, Bar)> = bars
-        .iter()
-        .map(|(t, c, _)| {
-            (
-                tf(*t),
-                Bar {
-                    end: grid_time(c.end),
-                    open: c.open as f64 / SCALE,
-                    high: c.high as f64 / SCALE,
-                    low: c.low as f64 / SCALE,
-                    close: c.close as f64 / SCALE,
-                },
-            )
-        })
-        .collect();
-    out.sort_by(|a, b| (a.1.end, a.0).cmp(&(b.1.end, b.0)));
-    out
+    rules_bars(bars)
 }
 pub fn run(root: &Path, symbol: &str, config: &Path, output: &Path) -> Result<(), String> {
     if output.exists() {
@@ -66,7 +42,7 @@ pub fn run(root: &Path, symbol: &str, config: &Path, output: &Path) -> Result<()
         for (t, bar) in to_rules(&bars) {
             swing.close(t, bar, now);
         }
-        swing.minute(now, m.price[1] as f64 / SCALE, m.price[2] as f64 / SCALE);
+        swing.minute(now, m.price[1] as f64 / 1e6, m.price[2] as f64 / 1e6);
         Ok(())
     })?;
     crate::swing_replay::write_trades(&swing, output)

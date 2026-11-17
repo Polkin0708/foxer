@@ -13,6 +13,8 @@ pub struct Change {
 }
 pub struct Batch {
     pub bars: Vec<(Timeframe, Candle)>,
+    /// All closed bars, including incomplete ones, with their completeness flag.
+    pub all_bars: Vec<(Timeframe, Candle, bool)>,
     pub changes: Vec<Change>,
     pub weekly: Vec<(Option<Side>, Option<Side>)>,
 }
@@ -30,7 +32,12 @@ pub fn process(
         .ok_or("unknown instrument")?
         .price_tick;
     let before = e.signals();
-    let bars = a.push(t.clone())?;
+    let all_bars = a.push_all(t.clone())?;
+    let bars: Vec<(Timeframe, Candle)> = all_bars
+        .iter()
+        .filter(|(_, _, complete)| *complete)
+        .map(|(tf, bar, _)| (*tf, bar.clone()))
+        .collect();
     let mut weekly = Vec::new();
     for (tf, b) in &bars {
         if allow {
@@ -76,6 +83,7 @@ pub fn process(
         .collect();
     Ok(Batch {
         bars,
+        all_bars,
         changes,
         weekly,
     })
