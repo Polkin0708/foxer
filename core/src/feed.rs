@@ -8,6 +8,12 @@ pub struct Tick {
     pub price: i64,
     pub source: String,
 }
+fn complete(bars: Vec<(Timeframe, Candle, bool)>) -> Vec<(Timeframe, Candle)> {
+    bars.into_iter()
+        .filter(|(_, _, complete)| *complete)
+        .map(|(tf, bar, _)| (tf, bar))
+        .collect()
+}
 #[derive(Clone, Serialize, Deserialize)]
 struct OpenBar {
     bar: Candle,
@@ -27,7 +33,12 @@ impl Aggregator {
         self.last.as_ref().map(|t| t.millis)
     }
 
+    /// Closed complete bars (for the main engine).
     pub fn push(&mut self, t: Tick) -> Result<Vec<(Timeframe, Candle)>, String> {
+        Ok(complete(self.push_all(t)?))
+    }
+    /// All closed bars with their completeness flag.
+    pub fn push_all(&mut self, t: Tick) -> Result<Vec<(Timeframe, Candle, bool)>, String> {
         if t.millis < 0 || t.price <= 0 || t.source.is_empty() {
             return Err("invalid tick".into());
         }
@@ -71,9 +82,7 @@ impl Aggregator {
                     old.bar.close = t.price;
                     continue;
                 }
-                if old.complete {
-                    closed.push((tf, old.bar.clone()));
-                }
+                closed.push((tf, old.bar.clone(), old.complete));
             }
             let complete = self
                 .open
@@ -100,12 +109,22 @@ impl Aggregator {
         self.last = Some(t);
         Ok(closed)
     }
+    /// Closed complete bars after a prepared minute (for the main engine).
     pub fn minute(
         &mut self,
         symbol: &str,
         source: &str,
         minute: &crate::prices::Minute,
     ) -> Result<Vec<(Timeframe, Candle)>, String> {
+        Ok(complete(self.minute_all(symbol, source, minute)?))
+    }
+    /// All closed bars after a prepared minute with their completeness flag.
+    pub fn minute_all(
+        &mut self,
+        symbol: &str,
+        source: &str,
+        minute: &crate::prices::Minute,
+    ) -> Result<Vec<(Timeframe, Candle, bool)>, String> {
         if minute.gap_before_minutes > 0 {
             let covered =
                 crate::calendar::after_market_closure(self.minute_end.unwrap_or(minute.timestamp));
@@ -118,7 +137,7 @@ impl Aggregator {
         // Prepared minutes carry their own gap information; the tick-time
         // continuity check belongs to live quotes.
         self.minute_end = None;
-        let bars = self.push(Tick {
+        let bars = self.push_all(Tick {
             symbol: symbol.into(),
             source: source.into(),
             millis: minute.timestamp * 1000,

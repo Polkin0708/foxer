@@ -13,9 +13,9 @@ fn aggregator_bars_reach_the_rules_in_time_order_on_the_source_grid() {
     };
     // W, D and H4 ending at the same time, plus an earlier H4 after a gap.
     let bars = vec![
-        (Timeframe::W, c(1_704_852_000)),
-        (Timeframe::D, c(1_704_852_000)),
-        (Timeframe::H4, c(1_704_837_600)),
+        (Timeframe::W, c(1_704_852_000), false),
+        (Timeframe::D, c(1_704_852_000), false),
+        (Timeframe::H4, c(1_704_837_600), false),
     ];
     let out = to_rules(&bars);
     let order: Vec<Tf> = out.iter().map(|(tf, _)| *tf).collect();

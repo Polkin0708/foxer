@@ -110,3 +110,25 @@ fn declared_gap_inside_the_week_still_breaks_the_weekly_bar() {
         .unwrap();
     assert!(!tfs(&closed).contains(&Timeframe::W));
 }
+
+#[test]
+fn incomplete_bars_are_reported_separately_and_withheld_from_the_engine() {
+    let mut a = Aggregator::default();
+    week(&mut a, "2026-01-05T14:00:00Z", "2026-01-05T15:00:00Z");
+    // Two hours without quotes inside the 13:00-17:00 New York H4 bar.
+    let all = a
+        .minute_all("EURUSD", "s", &m(utc("2026-01-05T17:00:00Z").unwrap(), 120))
+        .unwrap();
+    assert!(all.is_empty());
+    let mut b = a.clone();
+    let close = m(utc("2026-01-05T22:00:00Z").unwrap(), 0);
+    let all = a.minute_all("EURUSD", "s", &close).unwrap();
+    let h4: Vec<bool> = all
+        .iter()
+        .filter(|(tf, _, _)| *tf == Timeframe::H4)
+        .map(|(_, _, complete)| *complete)
+        .collect();
+    assert_eq!(h4, [false]);
+    let engine = b.minute("EURUSD", "s", &close).unwrap();
+    assert!(!tfs(&engine).contains(&Timeframe::H4));
+}

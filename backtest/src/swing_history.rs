@@ -17,10 +17,10 @@ fn tf(t: Timeframe) -> Tf {
     }
 }
 /// Aggregator bars converted for the rules and ordered by close time, then W, D, H4.
-pub fn to_rules(bars: &[(Timeframe, Candle)]) -> Vec<(Tf, Bar)> {
+pub fn to_rules(bars: &[(Timeframe, Candle, bool)]) -> Vec<(Tf, Bar)> {
     let mut out: Vec<(Tf, Bar)> = bars
         .iter()
-        .map(|(t, c)| {
+        .map(|(t, c, _)| {
             (
                 tf(*t),
                 Bar {
@@ -61,7 +61,7 @@ pub fn run(root: &Path, symbol: &str, config: &Path, output: &Path) -> Result<()
     let mut swing = Swing::new(cfg);
     let mut aggregator = Aggregator::default();
     read_minutes(&files, i64::MIN, i64::MAX, |m| {
-        let bars = aggregator.minute(symbol, &source, &m)?;
+        let bars = aggregator.minute_all(symbol, &source, &m)?;
         let now = grid_time(m.timestamp);
         for (t, bar) in to_rules(&bars) {
             swing.close(t, bar, now);
