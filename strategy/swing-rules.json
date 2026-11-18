@@ -94,12 +94,12 @@
     },
     "USDJPY": {
       "atr_period": 14,
-      "rr_fixed": 2.0,
-      "take_profit": "fixed",
-      "rr_target_cap": 5.0,
-      "plan_days": 10,
-      "stop_lookback_h4_bars": 30,
-      "stop_buffer_atr": 0.05,
+      "rr_fixed": 2.25,
+      "take_profit": "target",
+      "rr_target_cap": 3.0,
+      "plan_days": 7,
+      "stop_lookback_h4_bars": 20,
+      "stop_buffer_atr": 0.025,
       "correction_h4_confirm_without_opposing_zone": true,
       "entry_close_hours": [
         0,
